@@ -39,6 +39,8 @@ for a in "$@"; do
 	esac
 done
 [ -n "$scenario" ] || usage
+command -v fastboot >/dev/null ||
+	{ echo "не найден fastboot: brew install --cask android-platform-tools, или положите adb и fastboot в $KIT/platform-tools"; exit 1; }
 
 # What each scenario asks of the kernel (docs/boot-args.md in hakios-xnu-kernel says what every word does).
 #   bootcpu=7 cpus=8 big_only=1   the system on the four big cores, the three small ones not started (smoother)
