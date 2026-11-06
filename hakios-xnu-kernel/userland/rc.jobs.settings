@@ -1,0 +1,11 @@
+# Commands run by the launchd job com.hakios.demo (see com.hakios.demo.plist).
+# Settings worked hard (RC_JOBS=rc.jobs.settings, XL_SECS=260): unlock, Settings opened, its list flung down and up and
+# dragged, rows opened and closed by the back gesture, three times; for black rectangles in place of text and for
+# Settings ending by itself (screenshots in the pauses: xl screenshot; launchd's line for its exit in the log).
+/hakios/bin/rwtouch wait 30 swipe 0.5 0.985 0.5 0.3 200 wait 8
+/hakios/bin/rwtouch tap 0.615 0.71 wait 4 swipe 0.5 0.85 0.5 0.2 120 wait 3 swipe 0.5 0.85 0.5 0.2 120 wait 3 swipe 0.5 0.2 0.5 0.85 120 wait 3 swipe 0.5 0.2 0.5 0.85 120 wait 3
+/hakios/bin/rwtouch tap 0.5 0.62 wait 4 swipe 0.02 0.5 0.8 0.5 250 wait 3 tap 0.5 0.70 wait 4 swipe 0.02 0.5 0.8 0.5 250 wait 3 tap 0.5 0.78 wait 4 swipe 0.02 0.5 0.8 0.5 250 wait 3
+/hakios/bin/rwtouch zigzag 0.5 0.75 0.3 400 5 wait 3 swipe 0.5 0.85 0.5 0.15 100 wait 3 swipe 0.5 0.15 0.5 0.85 100 wait 3
+/hakios/bin/rwtouch tap 0.5 0.45 wait 4 swipe 0.02 0.5 0.8 0.5 250 wait 3 tap 0.5 0.55 wait 4 swipe 0.02 0.5 0.8 0.5 250 wait 3
+/hakios/bin/rwtouch swipe 0.5 0.85 0.5 0.2 120 wait 3 swipe 0.5 0.85 0.5 0.2 120 wait 3 tap 0.5 0.5 wait 4 swipe 0.02 0.5 0.8 0.5 250 wait 3 swipe 0.5 0.2 0.5 0.85 120 wait 3 swipe 0.5 0.2 0.5 0.85 120 wait 3
+/hakios/bin/rwtouch button home wait 3 tap 0.615 0.71 wait 4 swipe 0.5 0.85 0.5 0.2 120 wait 3 tap 0.5 0.6 wait 4 swipe 0.02 0.5 0.8 0.5 250 wait 3

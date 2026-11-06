@@ -1,0 +1,65 @@
+# Commands run by the launchd job com.hakios.demo (RC_JOBS=rc.jobs.airkernels).
+#
+# Every compute kernel of the corpus, dispatched on the Adreno. This is the question softpipe
+# cannot answer and has been deferred twice: of the 47, six dispatch on software and 38 stop in
+# nir_to_tgsi, which has no scratch memory and lacks compute intrinsics that ir3 has
+# (tools/air/kernelcheck.py). So those 38 are not a statement about the frontend or the GPU --
+# they are a statement about a software rasteriser, and only the phone can replace it.
+#
+# What this run can establish is capability, not correctness. There is no executed reference for
+# these kernels anywhere: softpipe will not run them, so a number from the Adreno has nothing on
+# this machine to be compared against, and air_run's own buffer and image readback is the only
+# output. A kernel that dispatches and prints plausible numbers has been shown to RUN; whether it
+# computed what Metal says is a separate question with no second source today. Read the lines as
+# "dispatched" or "refused", not as agreement.
+#
+# The first line is the shader M1 is stated against, with --disasm: it proves the GPU is there and
+# that ir3 compiled what ran, which the screen name alone does not.
+/hakios/bin/air_run --disasm /System/Library/Extensions/AppleMetalGLRenderer.bundle/default.metallib clearFragment01
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib BlitLumaKernel_Uint
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib BlitChromaKernel_Uint
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib BlitLumaKernel_UintPacked
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib BlitChromaKernel_UintPacked
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib BlitLumaKernel_Unorm
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib BlitChromaKernel_Unorm
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib BlitKernel_Unorm
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib FilmGrainLumaKernel_Uint
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib FilmGrainChromaKernel_Uint
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib FilmGrainLumaKernel_Unorm
+/hakios/bin/air_run /System/Library/VideoDecoders/AV1SW.metallib FilmGrainChromaKernel_Unorm
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_Clear
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_InitMinMax
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_MinMax
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_CalcCubeInputScaling
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_PopulateCube
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_DilateCubeLuma
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_DilateCubeChroma1
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_DilateCubeChroma2
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_ErodeCubeLuma
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_ErodeCubeChroma1
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_ErodeCubeChroma2
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_InitSpanTable
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_GenerateMask
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_GenerateToothMask
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_ConnectSpans
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_PropagateParents
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_PropogateAssociations
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_ResolveAssociations
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_AddSeedPoint
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_DrawSpans
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib MetalFaceMask_DrawEye
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_bistochastize_init
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_bistochastize_iter
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_bistochastize_final
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_pcg_init
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_pcg_iter1
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_pcg_iter2
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_pcg_iter3
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_slice
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib fbs_slice_trilinear
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib spillCorrectionPreProcess
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib spillCorrectionPostProcess
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib image_calcminmax0
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib image_calcminmax1
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib image_calcminmax2
+/hakios/bin/air_run /System/Library/CoreImage/PortraitFilters.cifilter/default.metallib confidence

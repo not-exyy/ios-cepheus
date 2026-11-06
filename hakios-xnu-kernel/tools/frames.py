@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""
+frames.py RUN.log [MORE.log ...]: how evenly the frames of a run's gestures came, and what held up the slow ones.
+(More logs: the live ones of the same run, XL_FOLLOW=N XL_FOLLOW_KEEP=1, which keep what the run's log loses.)
+
+Reads the "tl:" lines a run with boot-arg touch_lat=1 writes (see tools/latency.py for what each
+says): the samples and buttons of rwtouch (tl: p), the window server's frames (tl: g: began, ended),
+their hand-over (tl: s), the display driver's GPU wait and copy (tl: v), and every wait of a program
+for the GPU of a millisecond or more (tl: f). Every gesture -- from a touch going down, or a button,
+to the next one or 2.5 s later -- is a segment; for each:
+
+  frames a second while frames came; the share of frame-to-frame times (as the frames reached the
+  panel's memory) over 16.7 ms (counted from 18.0: a 60 Hz frame missed) and over 33 ms (from 34.5);
+  with boot-arg cpuload=MS (tl: u), how busy each processor core was meanwhile, in percent;
+  and for the frames over 16.7 ms, where the time between the previous frame and this one went:
+    draw      the window server drawing it (its first draw to its glFlush done: CPU, Mesa included)
+    gpu       the GPU after the hand-over (SwapEnd to done)
+    idle      the window server not drawing at all before it began (waiting for a commit, a fence, ...)
+    copy      the display driver's copy into the panel's memory
+
+A freeze is a pause of 100 ms or more with the motion going on after it, which began while a finger was on the
+screen or less than 400 ms after the last touch sample or button; one that began later is iOS waiting before a
+motion of its own (the page dots turning back into the Search pill) and is counted apart.
+A step of 34-100 ms a second or more after the last touch, with nothing smooth after it, is the screen at rest (on
+the home screen the Clock icon's second hand, a frame every 100 ms) and is counted apart too.
+
+The thresholds are as the coordinator asked for them; 18.0 rather than 16.7 because a frame of a steady
+60 comes 16.6 to 16.8 ms after the one before.
+"""
+import bisect
+import os
+import sys
+
+OVER_ONE, OVER_TWO, SEGMENT_US = 18000, 34500, 2500000
+SETTLED_US = 400000
+REST_US = 1000000                 # the screen at rest: a second after the last touch or button
+# the first cpu-id of a small core: the loader lists the boot core, then the big ones, then the small (xnuloader/loader.c);
+# on the phone with cpus=7 the Cortex-A55s are 4, 5 and 6 (FRAMES_SMALL_FROM= for another layout)
+SMALL_FROM = int(os.environ.get('FRAMES_SMALL_FROM', '4'))
+
+
+def lines_of(paths):
+    seen, out = set(), []
+    for path in paths:
+      with open(path, 'rb') as f:
+        for raw in f:
+            text = raw.decode('utf-8', 'replace')
+            at = text.find('tl: ')
+            if at < 0:
+                continue
+            line = text[at:].strip()
+            if line not in seen:
+                seen.add(line)
+                out.append(line)
+    return out
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    gestures, frames, swaps, shows, waits, loads, inputs = [], [], {}, {}, [], [], []
+    for line in lines_of(sys.argv[1:]):
+        w = line.split()
+        try:
+            if w[1] == 'p' and len(w) >= 8:
+                inputs.append(int(w[7]))
+            if w[1] == 'p' and len(w) >= 8 and int(w[2]) in (1, 4):
+                gestures.append((int(w[7]), int(w[2]), int(w[3]), int(w[4]), int(w[5])))
+            elif w[1] == 'g' and len(w) >= 8:
+                # (and the core it ended on, "cpu N", where eagl.c says it: -1 where it does not)
+                frames.append((int(w[4]), int(w[6]), int(w[7]), int(w[9]) if len(w) >= 10 and w[8] == 'cpu' else -1))
+            elif w[1] == 'M' and len(w) >= 6 and w[2] == 'made' and w[4] == 'committed':
+                # the window server on Metal (userland/src/HakiosMetalCA.m): a command buffer made, then committed --
+                # its drawing, as eagl.c's frame is from its first draw to its glFlush
+                frames.append((int(w[3]), int(w[5]), 0, -1))
+            elif w[1] == 's' and len(w) >= 5:
+                swaps[int(w[2])] = int(w[4])
+            elif w[1] == 'v' and len(w) >= 9:
+                shows[int(w[2])] = (int(w[4]), int(w[6]), int(w[8]))
+            elif w[1] == 'f' and len(w) >= 6:
+                waits.append((int(w[5]), w[2], int(w[3])))
+            elif w[1] == 'u' and len(w) >= 4:
+                loads.append((int(w[3]), {int(a): int(b) for a, b in (x.split(':') for x in w[4:])}))
+        except ValueError:
+            pass
+    gestures.sort()
+    inputs.sort()
+    frames.sort(key=lambda f: f[1])
+    # every frame on the panel, with the drawing it came from
+    timeline = []
+    for sid in sorted(shows):
+        if sid not in swaps:
+            continue
+        swap = swaps[sid]
+        drawn = [f for f in frames if f[1] <= swap]
+        if not drawn:
+            continue
+        began, ended, draws, cpu = drawn[-1]
+        ready, shown, done = shows[sid]
+        timeline.append(dict(began=began, ended=ended, swap=swap, ready=ready, shown=shown, done=done, cpu=cpu))
+    timeline.sort(key=lambda f: f['done'])
+    all_counts = [0, 0, 0]
+    freezes = [0, 0]                  # pauses of 100 ms or more in a gesture's first second; the longest
+    settled = [0, 0]                  # ... of them, those that began after the motion had settled
+    resting = [0]                     # steps over 33 ms with the screen at rest (the Clock icon's second hand)
+    kinds, previous = {}, ''          # the same gesture done more than once: its frames together
+    print(f'frames.py: {len(gestures)} gestures, {len(timeline)} frames on the panel, {len(waits)} waits for the GPU '
+          f'of 1 ms or more')
+    for i, (start, kind, button, x, y) in enumerate(gestures):
+        end = min(gestures[i + 1][0] if i + 1 < len(gestures) else start + SEGMENT_US, start + SEGMENT_US)
+        chosen = [f for f in timeline if start <= f['done'] < end]
+        what = f'button {button}' if kind == 4 else f'touch at {x / 655.35:.0f}%,{y / 655.35:.0f}%'
+        key = f'{what} after {previous}' if kind == 4 else what
+        previous = what
+        if len(chosen) < 3:
+            print(f'{i + 1:2}. {start / 1e6:9.3f} s {what}: {len(chosen)} frames')
+            continue
+        gaps = [(b['done'] - a['done'], a, b) for a, b in zip(chosen, chosen[1:])]
+        def last_input_before(at):
+            k = bisect.bisect_right(inputs, at)
+            return inputs[k - 1] if k > 0 else 0
+        # A step over 33 ms that began a second or more after the last touch or button (REST_US), no smooth motion right
+        # after it either (the next step over 33 ms too, or none), is the screen at rest, not a slow frame: on the home
+        # screen the Clock icon's second hand is moved 10 times a second (-[SBHClockApplicationIconImageView
+        # _timerFired:], a display link of 10 a second: "hakios: display link ... asked for 10..120"), and the window
+        # server draws a frame for it every 100 ms (23 draws) for as long as the home screen is shown -- iOS's own,
+        # an iPhone's clock icon ticks too (logs/111623-run.log: 2 s after the home button, 12-13 such frames before
+        # the next gesture). They were 5-6% of the home button's frames "over 33 ms", 3% of a page swipe's back to the
+        # first page; in Settings, at rest 1.5 s after the tap, a frame every 50-83 ms. Counted apart.
+        def at_rest(j):
+            g = gaps[j]
+            return (OVER_TWO < g[0] < 100000 and g[1]['done'] - last_input_before(g[1]['done']) >= REST_US and
+                    (j + 1 >= len(gaps) or gaps[j + 1][0] > OVER_TWO))
+        rest = [g for j, g in enumerate(gaps) if at_rest(j)]
+        resting[0] += len(rest)
+        # (a pause is the end of the movement, not a slow frame)
+        moving = [g for j, g in enumerate(gaps) if g[0] < 100000 and not at_rest(j)]
+        # ... unless the motion goes on after it (the next frame within 50 ms): then it is a freeze the eye sees,
+        # counted apart, with the longest
+        paused = [g for j, g in enumerate(gaps) if g[0] >= 100000 and j + 1 < len(gaps) and gaps[j + 1][0] < 50000]
+        # ... but a pause that began well after the last touch sample or button (SETTLED_US) is not one the hand
+        # feels: what moved before it had come to rest, and what came after it is a motion of its own that iOS
+        # starts after a delay -- the page dots turning back into the Search pill, 0.28 s after a page swipe has
+        # stopped (logs/115042-run.log with sb_diff=1: the dots' alpha creeps 0.994 -> 1.000 before the pause, then
+        # they fade out and SBHSearchPillView fades in). Those are counted apart.
+        frozen = [g for g in paused if g[1]['done'] - last_input_before(g[1]['done']) < SETTLED_US]
+        settled[0] += len(paused) - len(frozen)
+        settled[1] = max([settled[1]] + [g[0] for g in paused if g not in frozen])
+        freezes[0] += len(frozen)
+        freezes[1] = max([freezes[1]] + [g[0] for g in frozen])
+        span = sum(g[0] for g in moving)
+        over1 = [g for g in moving if g[0] > OVER_ONE]
+        over2 = [g for g in moving if g[0] > OVER_TWO]
+        all_counts[0] += len(moving)
+        all_counts[1] += len(over1)
+        all_counts[2] += len(over2)
+        k = kinds.setdefault(key, [0, 0, 0, 0, 0])
+        k[0] += 1
+        k[1] += len(moving)
+        k[2] += span
+        k[3] += len(over1)
+        k[4] += len(over2)
+        fps = len(moving) * 1e6 / span if span else 0
+        line = (f'{i + 1:2}. {start / 1e6:9.3f} s {what}: {len(moving)} frames at {fps:4.1f} a second; '
+                f'over 16.7 ms {100 * len(over1) / max(1, len(moving)):3.0f}%, over 33 ms {100 * len(over2) / max(1, len(moving)):3.0f}%')
+        if frozen:
+            line += f'; FROZEN {len(frozen)} times, the longest {max(g[0] for g in frozen) / 1000:.0f} ms'
+        if over1:
+            # where the slow frames' time went (means over them)
+            def mean(values):
+                return sum(values) / len(values) / 1000 if values else 0
+            draw = mean([b['ended'] - b['began'] for _, a, b in over1])
+            gpu = mean([b['ready'] - b['swap'] for _, a, b in over1])
+            idle = mean([b['began'] - a['ready'] for _, a, b in over1])
+            copy = mean([b['done'] - b['shown'] for _, a, b in over1])
+            line += f'; the slow ones: draw {draw:4.1f}, gpu {gpu:4.1f}, idle before {idle:5.1f}, copy {copy:3.1f} ms'
+            known = [b for _, a, b in over1 if b['cpu'] >= 0]
+            if known:
+                line += f', {100 * sum(b["cpu"] >= SMALL_FROM for b in known) / len(known):.0f}% drawn on small cores'
+            stalls = [w for w in waits if start <= w[0] < end]
+            if stalls:
+                line += f'; {len(stalls)} waits for the GPU ({sum(w[2] for w in stalls) / 1000:.0f} ms)'
+        # the load samples that end within the movement (each covers the cpuload=MS before it)
+        within = [l for t, l in loads if chosen[0]['done'] < t <= chosen[-1]['done']]
+        if within:
+            cores = sorted({c for l in within for c in l}, reverse=True)
+            line += '; cores busy ' + ' '.join(f'{c}:{sum(l.get(c, 0) for l in within) / len(within):.0f}%' for c in cores)
+        print(line)
+    if any(k[0] > 1 for k in kinds.values()):
+        print('the same gestures together:')
+        for key, (times, steps, span, over1, over2) in kinds.items():
+            print(f'  {key:40} {times} times, {steps:4} frames at {steps * 1e6 / span if span else 0:4.1f} a second; '
+                  f'over 16.7 ms {100 * over1 / max(1, steps):3.0f}%, over 33 ms {100 * over2 / max(1, steps):3.0f}%')
+    if all_counts[0]:
+        print(f'freezes (a pause of 100 ms or more with the motion going on after it): {freezes[0]}, the longest {freezes[1] / 1000:.0f} ms')
+        print(f'  not counted: pauses that began {SETTLED_US // 1000} ms or more after the last touch, iOS waiting before a '
+              f'motion of its own: {settled[0]}, the longest {settled[1] / 1000:.0f} ms')
+        print(f'  not counted: steps of 34-100 ms with the screen at rest ({REST_US // 1000} ms or more after the last touch, '
+              f'none smooth after them: the Clock icon\'s second hand, 10 a second): {resting[0]}')
+    print(f'all gestures: {all_counts[0]} frame steps, over 16.7 ms {100 * all_counts[1] / all_counts[0]:.0f}%, '
+              f'over 33 ms {100 * all_counts[2] / all_counts[0]:.0f}%')
+    # the window server's drawing by the kind of core it ended on (eagl.c's "cpu N")
+    known = [f for f in timeline if f['cpu'] >= 0]
+    if known:
+        small = [f['ended'] - f['began'] for f in known if f['cpu'] >= SMALL_FROM]
+        big = [f['ended'] - f['began'] for f in known if f['cpu'] < SMALL_FROM]
+        def avg(values):
+            return sum(values) / len(values) / 1000 if values else 0
+        print(f'drawing: {len(big)} frames on big cores ({avg(big):.1f} ms each), {len(small)} on small ones '
+              f'({avg(small):.1f} ms each)')
+
+
+if __name__ == '__main__':
+    main()

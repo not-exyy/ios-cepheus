@@ -1,0 +1,8 @@
+# Commands run by the launchd job com.hakios.demo (see com.hakios.demo.plist).
+# wifid's way of keeping a network's password (RC_JOBS=rc.jobs.wifipw, with WIFID=1 and
+# OSLOG="com.apple.wifid com.apple.securityd" for their side): once the system has settled, a made-up
+# network's password into the keychain the way wifid puts it there, back, and away again; then
+# keychain_test's own item for comparison.
+/hakios/bin/net_test wait 40
+/hakios/bin/wifipw_test
+/hakios/bin/keychain_test

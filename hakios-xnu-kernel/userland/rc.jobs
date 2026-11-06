@@ -1,0 +1,9 @@
+# Commands run by the launchd job com.hakios.demo (see com.hakios.demo.plist).
+/hakios/bin/hello_dyn started by launchd
+/hakios/bin/svc_test
+/hakios/bin/surf_test
+/bin/ps -A
+/hakios/bin/mg_test
+# the processors: how many, and -- once the system has settled -- whether they work at the same time
+/hakios/bin/cpu_test
+/hakios/bin/cpu_test 240 &

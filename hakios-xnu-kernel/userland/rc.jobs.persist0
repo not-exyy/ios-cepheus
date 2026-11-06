@@ -1,0 +1,20 @@
+# Commands run by the launchd job com.hakios.demo (see com.hakios.demo.plist).
+# The boot before the series of rc.jobs.persist5: the store is forgotten first, so that what
+# follows starts from a volume as empty as every boot of this port used to be. Run this one
+# WITHOUT var_store=1 -- nothing is restored and nothing saved, and it doubles as the measure of
+# a return to the loader with no saver registered: not one var_store line should be in its log.
+/hakios/bin/var_store erase
+/hakios/bin/var_store show
+/hakios/bin/vol_ls fs /private/var
+/hakios/bin/vol_ls cat /private/var/hakios-stamp 4096
+/hakios/bin/keychain_test keep
+/hakios/bin/vol_ls ls /private/var/mobile/Library/SpringBoard
+/hakios/bin/vol_ls hash /private/var/mobile/Library/SpringBoard/IconState.plist
+/hakios/bin/vol_ls ls /private/var/mobile/Containers/Data/Application
+/hakios/bin/vol_ls ls /private/var/mobile/Containers/Shared/AppGroup
+/hakios/bin/var_store stamp /private/var/hakios-stamp
+sleep 120
+/bin/ps -A
+/hakios/bin/vol_ls ls /private/var/mobile/Library/SpringBoard
+/hakios/bin/vol_ls hash /private/var/mobile/Library/SpringBoard/IconState.plist
+/hakios/bin/keychain_test read

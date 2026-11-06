@@ -1,0 +1,18 @@
+# Made on your computer or personal: never commit these (README, "Лицензии и чужие файлы").
+.DS_Store
+__pycache__/
+/platform-tools/
+/work/
+/backups/
+/logs/
+/hakios-xnu-kernel/logs/
+/hakios-xnu-kernel/sysimage/
+/hakios-xnu-kernel/fw-*/
+/hakios-xnu-kernel/userland/*.apfs
+/hakios-xnu-kernel/xnuloader/identity.h
+/hakios-xnu-kernel/xnuloader/loader.efi
+/hakios-xnu-kernel/devices/cepheus/prebuilt/device-tree.dtb
+*.ipsw
+*.tgz
+*.tar.gz
+*.img
