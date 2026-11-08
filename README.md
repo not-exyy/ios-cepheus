@@ -1,3 +1,5 @@
+**Русский** | [English](README.en.md) | [简体中文](README.zh-CN.md)
+
 # HakiOS для Xiaomi Mi 9 (cepheus): iOS 16.5 на своём телефоне
 
 Этот набор запускает пользовательскую часть iOS 16.5 (экран блокировки, домашний экран, Настройки, приложения)
@@ -222,6 +224,8 @@ RAM_ONLY=1 ./setup.sh build ~/Downloads/iPhone10,3,iPhone10,6_16.5_20F66_Restore
 
 ```
 README.md             этот файл
+README.en.md          этот файл на английском
+README.zh-CN.md       этот файл на китайском (упрощённом)
 setup.sh              установка: check, firmware, build, backup, install, flash, verify, uninstall
 run.sh                запуск: сценарии gl, metal, basic; ram; again
 tools/gpt-take.py     install userdata: запись userdata в таблице разделов становится darwin, больше ничего
