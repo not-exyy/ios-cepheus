@@ -7,7 +7,7 @@ ADRENO_ONLY	arg	adreno_only	GPU and display	k	hakios.adreno.c	step K alone (what
 ADRENO_PAUSE	arg	adreno_pause	GPU and display	k	hakios.adreno.c	how long the newest step waits after announcing a group of accesses (default 2200)
 ADRENO_RETURN	arg	adreno_return	GPU and display	k	hakios.adreno.c	when all is over, go back to the loader instead of starting the system
 ADRENO_SKIP	arg	adreno_skip	GPU and display	k	hakios.adreno.c	leave out the steps whose bits are set (bit 2 = step 2)
-ADRENO_SPEED	arg	adreno_speed	GPU and display	k	hakios.adreno.c	step 17 asks the GMU for the 3D core's Nth speed: 1 315 MHz, 2 450 MHz, 3 550 MHz (the default: the most this phone's GPU is rated for)
+ADRENO_SPEED	arg	adreno_speed	GPU and display	k	hakios.adreno.c	step 17 asks the GMU for the 3D core's Nth speed: sm7325 1 315 MHz, 2 450 MHz, 3 550 MHz (the default: the most this phone's GPU is rated for);
 ADRENO_STREAM1	arg	adreno_stream1	GPU and display	k	hakios.adreno.c	step 18 leaves the core's second stream out (0) or gives it an empty context of its own (2): what the SMMU then records shows what the core
 ADRENO_WATCH	arg	adreno_watch	GPU and display	k	hakios.adreno.c	after the last step, say once a second for S seconds (default 20) that the machine is still alive, and what was written last
 ADSP_AGAIN	arg	adsp_again	Audio and battery	k	hakios.adsp.c	
@@ -52,6 +52,11 @@ APP_GL	arg	app_gl	User space	u	inject_tweaks.c
 APPLOG	arg	applog	CPU, memory and boot	k	(patch)	
 APPLOG_NAME	arg	applog_name	CPU, memory and boot	k	(patch)	
 AUTOUNLOCK	arg	autounlock	User space	u	inject_sb.c	
+BACKLIGHT	arg	backlight	GPU and display	k	hakios.backlight.c	a look, reading only: DSI controller 0's version and the registers a command goes through
+BACKLIGHT_DEFAULT	arg	backlight_default	GPU and display	k	hakios.backlight.c	the level iOS is told the panel is at when the service is made (default 1024), and the one
+BACKLIGHT_LP	arg	backlight_lp	GPU and display	k	hakios.backlight.c	
+BACKLIGHT_OFF	arg	backlight_off	GPU and display	k	hakios.backlight.c	brightness 0 makes the panel dark (by default the least is the panel's own least, 2: with the screen "off" it still shows, dimly)
+BACKLIGHT_TEST	arg	backlight_test	GPU and display	k	hakios.backlight.c	with 1 or 2: once, a few seconds after the start, the panel set to level N (2..2047), then
 BATTERY	arg	battery	Audio and battery	kl	hakios.adsp.c,hakios.battery.c,loader.c	
 BATTMGR	arg	battmgr	Audio and battery	k	hakios.adsp.c	every property once, for the log (which number is which on this phone's firmware)
 BIG_ONLY	arg	big_only	CPU, memory and boot	k	GenericARMPE.cpp	the slower cores are never started
@@ -87,6 +92,8 @@ DDR_VOTE	arg	ddr_vote	CPU, memory and boot	k	hakios.cpufreq.c
 DISPLAY_PROBE	arg	display_probe	GPU and display	k	hakios.adreno.c	before any step: read what the firmware left the display controller doing (display_probe() below; two clocks are turned on, nothing else written)
 FB_BEAT	arg	fb_beat	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 FB_CA_HZ	arg	fb_ca_hz	GPU and display	k	MiniIOMobileFramebuffer.cpp	the refresh rate told to CoreAnimation (IOMFBDisplayRefresh) when it is not to be fb_hz's
+FB_CUBIC_B	arg	fb_cubic_b	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+FB_CUBIC_C	arg	fb_cubic_c	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 FB_DIFF	arg	fb_diff	GPU and display	k	MiniIOMobileFramebuffer.cpp	which pixels of the panel each frame changed (it costs: the panel's memory is slow to read)
 FB_FILTER	arg	fb_filter	GPU and display	k	MiniIOMobileFramebuffer.cpp	the picture is scaled to the panel nearest neighbour, as it once was
 FB_FLIP	arg	fb_flip	GPU and display	k	MiniIOMobileFramebuffer.cpp	
@@ -95,6 +102,7 @@ FB_MEASURE	arg	fb_measure	GPU and display	k	MiniIOMobileFramebuffer.cpp	how ofte
 FB_PP	arg	fb_pp	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 FB_PRI	arg	fb_pri	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 FB_QUEUE	arg	fb_queue	GPU and display	k	MiniIOMobileFramebuffer.cpp	
+FB_REUSE	arg	fb_reuse	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 FB_TE	arg	fb_te	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 FB_THREADS	arg	fb_threads	GPU and display	k	MiniIOMobileFramebuffer.cpp	
 FBHEIGHT	arg	fbheight	GPU and display	k	MiniIOMobileFramebuffer.cpp	
@@ -153,8 +161,9 @@ MACHINE_NAME	arg	machine_name	CPU, memory and boot	k	GenericARMPE.cpp
 MEMBENCH	arg	membench	CPU, memory and boot	k	hakios.cpufreq.c	
 METAL	arg	metal	GPU and display	ku	HakiosMetal.m,MiniIOMobileFramebuffer.cpp	only the program metal_test (userland/src/metal_test.m): the safe level, for seeing what Metal does with the device
 METAL_ALL	arg	metal_all	User space	u	HakiosMetalCA.m	
+METAL_COVER	arg	metal_cover	User space	u	HakiosMetalCA.m	
 METAL_DUMP	arg	metal_dump	User space	u	HakiosMetalCA.m	
-METAL_FPS	arg	metal_fps	User space	u	HakiosMetalCA.m	each draw of a sysmem pass timed alone, by program (only sysmem passes are: without metal_gmem=1)
+METAL_FPS	arg	metal_fps	User space	u	HakiosMetalCA.m	the draws of a heavy GMEM pass listed (program, blending, attachments, corners), nothing timed alone
 METAL_GMEM	arg	metal_gmem	User space	u	HakiosMetalCA.m	
 METAL_GMEM_DRAWS	arg	metal_gmem_draws	User space	u	HakiosMetalCA.m	
 METAL_GMEM_OFF	arg	metal_gmem_off	User space	u	HakiosMetalCA.m	
@@ -181,6 +190,7 @@ MODEM_IPA_FW_AT	arg	modem_ipa_fw_at	Cellular	k	hakios.mpss.c
 MODEM_IPA_GSI_ENABLE	arg	modem_ipa_gsi_enable	Cellular	k	hakios.mpss.c	
 MODEM_IPA_ITEM	arg	modem_ipa_item	Cellular	k	hakios.mpss.c	
 MODEM_IPA_NO_PROBE	arg	modem_ipa_no_probe	Cellular	k	hakios.mpss.c	
+MODEM_IPA_QMI	arg	modem_ipa_qmi	Cellular	k	hakios.mpss.c	
 MODEM_IPA_QUIET	arg	modem_ipa_quiet	Cellular	k	hakios.mpss.c	
 MODEM_IPA_RAW	arg	modem_ipa_raw	Cellular	k	hakios.mpss.c	
 MODEM_IPA_ROUTES	arg	modem_ipa_routes	Cellular	k	hakios.mpss.c	
@@ -273,6 +283,7 @@ TOUCH_LAT	arg	touch_lat	GPU and display	ku	HakiosMetalCA.m,MiniIOMobileFramebuff
 TOUCH_OFF_MS	arg	touch_off_ms	Touch and buttons	k	hakios.stfts.c	
 TOUCH_POLL_US	arg	touch_poll_us	Touch and buttons	k	hakios.goodix.c,hakios.stfts.c	
 TOUCH_RATE	arg	touch_rate	Touch and buttons	k	hakios.goodix.c	the chip reports twice as often (Xiaomi's game mode; 240 otherwise)
+TOUCH_RECOVER	arg	touch_recover	Touch and buttons	k	hakios.stfts.c	
 TOUCH_SPI_HZ	arg	touch_spi_hz	Touch and buttons	k	hakios.goodix.c	the bus at N Hz (Android's device tree gives the chip 5 MHz)
 UFS_BENCH	arg	ufs_bench	Storage and APFS	k	hakios.ufs.c	what one request through the loader costs, by size
 UFS_CHECK	arg	ufs_check	Storage and APFS	k	hakios.ufs.c	
@@ -297,16 +308,27 @@ VBLUR	arg	vblur	GPU and display	u	eagl.c
 VIRTIO_BLK	arg	virtio_blk	Storage and APFS	k	hakios.virtio_blk.c	
 VIRTIO_INPUT	arg	virtio_input	Touch and buttons	k	hakios.virtio_input.c	
 VIRTIO_SOUND	arg	virtio_sound	Audio and battery	k	hakios.virtio_sound.c	
+WCN_CE_PEEK	arg	wcn_ce_peek	Wi-Fi	k	hakios.wcn3990.c	
+WCN_LX	arg	wcn_lx	Wi-Fi	k	hakios.wcn3990.c	
+WCN_MAC	arg	wcn_mac	Wi-Fi	k	hakios.wcn3990.c	
+WCN_PAUSE	arg	wcn_pause	Wi-Fi	k	hakios.wcn3990.c	
+WCN_POWER	arg	wcn_power	Wi-Fi	k	hakios.wcn3990.c	
+WCN_QDSS_OFF	arg	wcn_qdss_off	Wi-Fi	k	hakios.wcn3990.c	
+WCN_READY	arg	wcn_ready	Wi-Fi	k	hakios.wcn3990.c	
+WCN_RETURN	arg	wcn_return	Wi-Fi	k	hakios.wcn3990.c	
+WCN_STEP	arg	wcn_step	Wi-Fi	k	hakios.wcn3990.c	
+WCN_WAIT	arg	wcn_wait	Wi-Fi	k	hakios.wcn3990.c	
+WCN_WATCH	arg	wcn_watch	Wi-Fi	k	hakios.wcn3990.c	
 WIFI_AGAIN	arg	wifi_again	Wi-Fi	k	hakios.wifi.c	start the DSP although the one before it was shut down without having acknowledged a stop: THAT HAS RESET THE PHONE, twice of two
 WIFI_ASK	arg	wifi_ask	Wi-Fi	k	hakios.wifi.c	step 14 also asks that service a question (its capabilities) and writes down the beginning of an answer
 WIFI_BA	arg	wifi_ba	Wi-Fi	k	lx_80211.c	
 WIFI_CAL	arg	wifi_cal	Wi-Fi	k	hakios.wlfw.c	
 WIFI_DIRTY	arg	wifi_dirty	Wi-Fi	k	hakios.wifi.c	
-WIFI_FILE	arg	wifi_file	Wi-Fi	k	hakios.wifi.c	with wifi=1: the network of fw/network is not joined at the start
+WIFI_FILE	arg	wifi_file	Wi-Fi	k	hakios.wcn3990.c,hakios.wifi.c	with wifi=1: the network of fw/network is not joined at the start
 WIFI_FINE	arg	wifi_fine	Wi-Fi	k	hakios.wifi.c	such a step waits like that before every single write and call
-WIFI_HOLD	arg	wifi_hold	Wi-Fi	k	lx_bus.c	
+WIFI_HOLD	arg	wifi_hold	Wi-Fi	k	lx_bus.c,lx_snoc.c	
 WIFI_IRQ	arg	wifi_irq	Wi-Fi	k	lx_bus.c	
-WIFI_JOIN	arg	wifi_join	Wi-Fi	k	lx_bus.c	
+WIFI_JOIN	arg	wifi_join	Wi-Fi	k	hakios.wcn3990.c,lx_bus.c,lx_snoc.c	
 WIFI_KEEP	arg	wifi_keep	Wi-Fi	k	hakios.wifi.c	when the steps are over the DSP and the link stay up while the system runs, for whoever uses sys/hakios.qrtr.h; stopped when the run ends
 WIFI_LISTEN	arg	wifi_listen	Wi-Fi	k	hakios.wifi.c	how long step 14 waits for the Wi-Fi firmware's service (default 3)
 WIFI_LOUD	arg	wifi_loud	Wi-Fi	k	hakios.wifi.c	
@@ -316,13 +338,13 @@ WIFI_MAC	arg	wifi_mac	Wi-Fi	k	hakios.wifi.c	the radio's own address for the driv
 WIFI_MISSION	arg	wifi_mission	Wi-Fi	k	hakios.wlfw.c	
 WIFI_NEW	arg	wifi_new	Wi-Fi	k	hakios.wifi.c	steps K and later have not been seen to work (default: the last one)
 WIFI_PAUSE	arg	wifi_pause	Wi-Fi	k	hakios.wifi.c	
-WIFI_QUIET	arg	wifi_quiet	Wi-Fi	k	lx_bus.c	
+WIFI_QUIET	arg	wifi_quiet	Wi-Fi	k	lx_bus.c,lx_snoc.c	
 WIFI_RADIO_READ	arg	wifi_radio_read	Wi-Fi	k	hakios.wifi.c	step 16 does read (2: whatever mode the firmware is in)
 WIFI_READY	arg	wifi_ready	Wi-Fi	k	hakios.wlfw.c	
 WIFI_RETURN	arg	wifi_return	Wi-Fi	k	hakios.wifi.c	when all is over, go back to the loader instead of starting the system
-WIFI_SCAN	arg	wifi_scan	Wi-Fi	k	lx_bus.c	
+WIFI_SCAN	arg	wifi_scan	Wi-Fi	k	lx_bus.c,lx_snoc.c	
 WIFI_SMMU	arg	wifi_smmu	Wi-Fi	k	hakios.wifi.c	before any step: read what the boot chain has set up in the SMMU for the radio's stream (smmu_look() below; nothing is written)
-WIFI_STATION	arg	wifi_station	Wi-Fi	k	lx_bus.c	
+WIFI_STATION	arg	wifi_station	Wi-Fi	k	hakios.wcn3990.c,lx_bus.c,lx_snoc.c	
 WIFI_STEP	arg	wifi_step	Wi-Fi	k	hakios.wifi.c	
 WIFI_WAIT	arg	wifi_wait	Wi-Fi	k	hakios.wifi.c	how long step 11 watches for the DSP to say that it is up (default 10)
 WIFI_WATCH	arg	wifi_watch	Wi-Fi	k	hakios.wifi.c	

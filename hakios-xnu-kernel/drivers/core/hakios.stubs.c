@@ -88,6 +88,9 @@ void hakios_adreno_minute(void) {}
 void hakios_wifi_init(void) {}
 void hakios_wifi_stop(void) {}
 void hakios_wifi_quiesce(void) {}
+#endif
+
+#ifndef HAKIOS_WLAN
 errno_t hakios_apple80211_ioctl(__unused u_long command, __unused void *data) { return EOPNOTSUPP; }
 void HakiosWLANStart(__unused const char *interface, __unused const uint8_t *address) {}
 #endif
@@ -98,10 +101,18 @@ void hakios_adsp_stop(void) {}
 void hakios_adsp_quiesce(void) {}
 #endif
 
+#ifndef HAKIOS_WCN3990
+void hakios_wcn3990_init(void) {}
+#endif
+
 #ifndef HAKIOS_MODEM
 void hakios_mpss_init(void) {}
 void hakios_mpss_stop(void) {}
 void hakios_mpss_quiesce(void) {}
+const struct hakios_qrtr_ops *hakios_mpss_qrtr(void) { return NULL; }
+bool hakios_mpss_aop(__unused const char *text) { return false; }
+int hakios_mpss_assign(__unused uint64_t address, __unused uint64_t size, __unused const uint32_t *from, __unused unsigned from_count,
+    __unused const uint32_t *to, __unused unsigned to_count, __unused uint64_t *answer) { return 6; /* ENXIO */ }
 #endif
 
 #ifndef HAKIOS_VIRTIO_NET
@@ -137,6 +148,10 @@ void hakios_mic_quiesce(void) {}
 void hakios_haptic_init(void) {}
 void hakios_haptic_quiesce(void) {}
 void hakios_haptic_pretend(__unused uint32_t peak) {}
+#endif
+
+#ifndef HAKIOS_BACKLIGHT
+void hakios_backlight_init(void) {}
 #endif
 
 #ifndef HAKIOS_TORCH

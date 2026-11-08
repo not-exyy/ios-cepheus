@@ -58,7 +58,7 @@ The 28 drivers there are now, by subsystem:
 | haptic | `HAPTIC`, `PMHAPTIC` | |
 | audio | `ADSP`, `SPEAKER`, `CS35L41`, `SOUND` (requires ADSP, and SPEAKER or CS35L41), `MIC` (requires ADSP, SOUND), `VIRTIO_SOUND` | `hakios.audio.c` |
 | power | `BATTERY`, `CPUFREQ`, `THERMAL`, `PMIC`, `BATTGUARD` | |
-| wifi | `WIFI` (requires QMI) | |
+| wifi | `WLAN`, `WIFI` (requires QMI, WLAN), `WCN3990` (requires WLAN) | |
 | bluetooth | `BT` | |
 | modem | `QMI`, `MODEM` (requires QMI, UFS) | |
 | net | `VIRTIO_NET` | `hakios.net.c` |
@@ -119,8 +119,9 @@ component's `conf/Makefile` makes its configuration again when `MASTER.hakios` c
 `-DHAKIOS_<NAME>` in the compiler's command line rather than as a file an object depends on, so when the choice changes,
 `kernel` also removes the objects of the files that ask about it (`#ifdef HAKIOS_*`): they are built again.
 
-Linux's `ath11k` object (`tools/mk-ath11k.sh`) is linked in only with `CONFIG_HAKIOS_WIFI` (`xnu-build.sh`): its calls are
-answered by `hakios.lx.c`.
+A Linux driver is linked in only with `CONFIG_HAKIOS_WLAN`, which builds `hakios.lx.c` that answers its calls (`xnu-build.sh`):
+`ath11k` (`tools/mk-ath11k.sh`) with `CONFIG_HAKIOS_WIFI`, otherwise `ath10k` (`tools/mk-ath10k.sh`) with
+`CONFIG_HAKIOS_WCN3990`. Both export the same four names, so one of them is linked, never both.
 
 ## Leaving a driver out without breaking the others
 

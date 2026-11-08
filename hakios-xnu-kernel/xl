@@ -216,6 +216,8 @@ run() { # run <oem command> <label>
 			args="bootcpu=7 -v"
 		fi
 		case " $args " in
+		# (cepheus first: its runs also carry wifi=1, for net_test's job, and want wcn_mac, not wifi_mac)
+		*" wcn_lx="*) [ -s fw-wifi/mac ] && args="$args wcn_mac=$(tr -d ' \n\r' < fw-wifi/mac)" ;;
 		*" wifi="*|*" wifi_step="*) [ -s fw-wifi/mac ] && args="$args wifi_mac=$(tr -d ' \n\r' < fw-wifi/mac)" ;;
 		esac
 		xnuloader/mkpayload.py -o run-payload.bin kernel=$K ${rd:+ramdisk=$rd} --cmdline "loader_return_after=${XL_SECS:-8} epoch=$(date +%s) sb_delay=${XL_SB_DELAY:-8} $args" >/dev/null || return 1

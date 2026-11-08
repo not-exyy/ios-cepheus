@@ -64,6 +64,17 @@ int	 lx_os_radio_address(unsigned char *address);
  */
 int	 lx_os_network(unsigned char *name, unsigned *name_length, unsigned char *passphrase, unsigned *passphrase_length);
 
+/*
+ * ---- a radio whose driver powers it itself: the WCN3990 (ath10k's snoc.c, tools/mk-ath10k.sh) ----
+ * Its supplies and its clocks on (1) or off (0), and a region of the memory its firmware has
+ * (the MSA) handed by TrustZone from us to the modem and the WLAN (to_radio 1; with_ce 1: to the
+ * WLAN's copy engines as well), or back to us (to_radio 0). Each 0, or an errno: the kernel
+ * refuses the supplies unless it was allowed to turn them on, and any region outside the MSA.
+ */
+int	 lx_os_radio_supplies(int on);
+int	 lx_os_radio_clocks(int on);
+int	 lx_os_radio_hand_over(unsigned long long address, unsigned long long size, int to_radio, int with_ce);
+
 /* ---- frames: the radio as what carries the machine's network interface ---- */
 void	 lx_os_net_attach(const unsigned char *address);	/* there is a radio, and this is its address */
 void	 lx_os_net_link(int up);				/* frames can pass now (a network is joined) / no longer */

@@ -16,5 +16,6 @@ void	lx_station_leave(void);		/* lx_80211.c: leave it, and the interface down */
 int	lx_station_send(const unsigned char *frame, unsigned long length);	/* lx_80211.c: an Ethernet frame for the network */
 int	lx_station_offer(void);	/* lx_80211.c: the station given to the kernel to ask (sys/hakios.sta.h); 0, or an errno */
 void	lx_station_withdraw(void);	/* lx_80211.c: ... and taken back */
+extern void (*lx_radio_started)(void);	/* lx_80211.c calls it after each start of the radio, if the bus has set it */
 
 #endif

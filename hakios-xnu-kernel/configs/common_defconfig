@@ -2,7 +2,7 @@
 # HakiOS common defconfig: every setting there is, with what it does.
 # Made by tools/hakios-config.py listing common -o <this file>; the values are the ones that file sets, and tests/CI check that it names every symbol.
 #
-# 392 symbols in 18 groups; 34 are set, 25 of them drivers built in.
+# 417 symbols in 18 groups; 35 are set, 26 of them drivers built in.
 #
 
 #
@@ -19,7 +19,7 @@
 CONFIG_FIRMWARE="device"
 
 #
-# Drivers built in (30)
+# Drivers built in (33)
 #
 
 # the audio DSP started and linked (adsp=1, adsp_step=N); the battery's state comes through it too. Needs the DSP's ... [hakios.adsp.c]
@@ -57,6 +57,9 @@ CONFIG_HAKIOS_SOCINFO=y
 
 # the Adreno 642L of the SC7280 woken step by step (adreno=N), and HakiosGPU, the IOKit service Mesa and the window ... [hakios.adreno.c, hakios.gpu.cpp]
 CONFIG_HAKIOS_ADRENO=y
+
+# the screen's brightness on the Xiaomi Mi 9 (cepheus): the EA8076 panel's DCS brightness (0x51) through DSI ... [hakios.backlight.c, hakios.backlight.cpp]
+# CONFIG_HAKIOS_BACKLIGHT is not set
 
 # the vibration motor: an Awinic AW86927 driving a linear resonant actuator (haptic=N), its waveforms from fw-haptic/ [hakios.haptic.c]
 CONFIG_HAKIOS_HAPTIC=y
@@ -109,8 +112,14 @@ CONFIG_HAKIOS_UFS=y
 # a disk image of the host as /dev/rvblk0 (virtio_blk=1). QEMU only [hakios.virtio_blk.c]
 CONFIG_HAKIOS_VIRTIO_BLK=y
 
-# Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, Linux's ath11k (its object, made ... [hakios.wifi.c, hakios.wlfw.c, hakios.lx.c, hakios.sta.c, hakios.apple80211.c, hakios.wlan.cpp; requires CONFIG_HAKIOS_QMI]
+# Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, and Linux's ath11k (its object, ... [hakios.wifi.c, hakios.wlfw.c; requires CONFIG_HAKIOS_QMI, CONFIG_HAKIOS_WLAN]
 CONFIG_HAKIOS_WIFI=y
+
+# What a Linux Wi-Fi driver's object stands on in the kernel (hakios.lx.c: memory, threads, interrupts, en0), a ... [hakios.lx.c, hakios.sta.c, hakios.apple80211.c, hakios.wlan.cpp]
+CONFIG_HAKIOS_WLAN=y
+
+# Wi-Fi of the Xiaomi Mi 9 (cepheus): the WCN3998, whose firmware runs in the modem's WLAN PD (wcn_step=N): a survey ... [hakios.wcn3990.c; requires CONFIG_HAKIOS_WLAN]
+# CONFIG_HAKIOS_WCN3990 is not set
 
 #
 # CPU, memory and boot (25)
@@ -328,7 +337,7 @@ CONFIG_UFS=2
 # CONFIG_VIRTIO_BLK is not set
 
 #
-# Touch and buttons (12)
+# Touch and buttons (13)
 #
 
 # the touch screen, and the power and volume buttons
@@ -361,6 +370,9 @@ CONFIG_TOUCHSCREEN=y
 # the chip reports twice as often (Xiaomi's game mode; 240 otherwise)
 # CONFIG_TOUCH_RATE is not set
 
+# read by hakios.stfts.c (kernel)
+# CONFIG_TOUCH_RECOVER is not set
+
 # the bus at N Hz (Android's device tree gives the chip 5 MHz)
 # CONFIG_TOUCH_SPI_HZ is not set
 
@@ -368,7 +380,7 @@ CONFIG_TOUCHSCREEN=y
 # CONFIG_VIRTIO_INPUT is not set
 
 #
-# GPU and display (79)
+# GPU and display (87)
 #
 
 # rendering on Adreno (an image built with GL=1; the GPU's firmware from your phone) [needs fw-gpu/ from the phone]
@@ -401,7 +413,7 @@ CONFIG_GPU=y
 # leave out the steps whose bits are set (bit 2 = step 2)
 # CONFIG_ADRENO_SKIP is not set
 
-# step 17 asks the GMU for the 3D core's Nth speed: 1 315 MHz, 2 450 MHz, 3 550 MHz (the default: the most this ...
+# step 17 asks the GMU for the 3D core's Nth speed: sm7325 1 315 MHz, 2 450 MHz, 3 550 MHz (the default: the most this ...
 # CONFIG_ADRENO_SPEED is not set
 
 # step 18 leaves the core's second stream out (0) or gives it an empty context of its own (2): what the SMMU then ...
@@ -409,6 +421,21 @@ CONFIG_GPU=y
 
 # after the last step, say once a second for S seconds (default 20) that the machine is still alive, and what was ...
 # CONFIG_ADRENO_WATCH is not set
+
+# a look, reading only: DSI controller 0's version and the registers a command goes through
+# CONFIG_BACKLIGHT is not set
+
+# the level iOS is told the panel is at when the service is made (default 1024), and the one
+# CONFIG_BACKLIGHT_DEFAULT is not set
+
+# read by hakios.backlight.c (kernel)
+# CONFIG_BACKLIGHT_LP is not set
+
+# brightness 0 makes the panel dark (by default the least is the panel's own least, 2: with the screen "off" it still ...
+# CONFIG_BACKLIGHT_OFF is not set
+
+# with 1 or 2: once, a few seconds after the start, the panel set to level N (2..2047), then
+# CONFIG_BACKLIGHT_TEST is not set
 
 # before any step: read what the firmware left the display controller doing (display_probe() below; two clocks are ...
 # CONFIG_DISPLAY_PROBE is not set
@@ -418,6 +445,12 @@ CONFIG_GPU=y
 
 # the refresh rate told to CoreAnimation (IOMFBDisplayRefresh) when it is not to be fb_hz's
 # CONFIG_FB_CA_HZ is not set
+
+# read by MiniIOMobileFramebuffer.cpp (kernel)
+# CONFIG_FB_CUBIC_B is not set
+
+# read by MiniIOMobileFramebuffer.cpp (kernel)
+# CONFIG_FB_CUBIC_C is not set
 
 # which pixels of the panel each frame changed (it costs: the panel's memory is slow to read)
 # CONFIG_FB_DIFF is not set
@@ -442,6 +475,9 @@ CONFIG_GPU=y
 
 # read by MiniIOMobileFramebuffer.cpp (kernel)
 # CONFIG_FB_QUEUE is not set
+
+# read by MiniIOMobileFramebuffer.cpp (kernel)
+# CONFIG_FB_REUSE is not set
 
 # read by MiniIOMobileFramebuffer.cpp (kernel)
 # CONFIG_FB_TE is not set
@@ -718,11 +754,44 @@ CONFIG_SOUND=4
 # CONFIG_VIRTIO_SOUND is not set
 
 #
-# Wi-Fi (31)
+# Wi-Fi (42)
 #
 
 # Wi-Fi: the radio, its driver, a connection (also fw-wifi/mac and fw-wifi/network) [needs fw-wifi/ from the phone]
 CONFIG_WIFI=y
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_CE_PEEK is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_LX is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_MAC is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_PAUSE is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_POWER is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_QDSS_OFF is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_READY is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_RETURN is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_STEP is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_WAIT is not set
+
+# read by hakios.wcn3990.c (kernel)
+# CONFIG_WCN_WATCH is not set
 
 # start the DSP although the one before it was shut down without having acknowledged a stop: THAT HAS RESET THE PHONE, ...
 # CONFIG_WIFI_AGAIN is not set
@@ -745,13 +814,13 @@ CONFIG_WIFI=y
 # such a step waits like that before every single write and call
 # CONFIG_WIFI_FINE is not set
 
-# read by lx_bus.c (kernel)
+# read by lx_bus.c, lx_snoc.c (kernel)
 # CONFIG_WIFI_HOLD is not set
 
 # read by lx_bus.c (kernel)
 # CONFIG_WIFI_IRQ is not set
 
-# read by lx_bus.c (kernel)
+# read by hakios.wcn3990.c, lx_bus.c, lx_snoc.c (kernel)
 # CONFIG_WIFI_JOIN is not set
 
 # when the steps are over the DSP and the link stay up while the system runs, for whoever uses sys/hakios.qrtr.h; ...
@@ -781,7 +850,7 @@ CONFIG_WIFI=y
 # read by hakios.wifi.c (kernel)
 # CONFIG_WIFI_PAUSE is not set
 
-# read by lx_bus.c (kernel)
+# read by lx_bus.c, lx_snoc.c (kernel)
 # CONFIG_WIFI_QUIET is not set
 
 # step 16 does read (2: whatever mode the firmware is in)
@@ -793,13 +862,13 @@ CONFIG_WIFI=y
 # when all is over, go back to the loader instead of starting the system
 # CONFIG_WIFI_RETURN is not set
 
-# read by lx_bus.c (kernel)
+# read by lx_bus.c, lx_snoc.c (kernel)
 # CONFIG_WIFI_SCAN is not set
 
 # before any step: read what the boot chain has set up in the SMMU for the radio's stream (smmu_look() below; nothing ...
 # CONFIG_WIFI_SMMU is not set
 
-# read by lx_bus.c (kernel)
+# read by hakios.wcn3990.c, lx_bus.c, lx_snoc.c (kernel)
 # CONFIG_WIFI_STATION is not set
 
 # read by hakios.wifi.c (kernel)
@@ -815,7 +884,7 @@ CONFIG_WIFI=y
 # CONFIG_WIFI_WIDE is not set
 
 #
-# Cellular (53)
+# Cellular (54)
 #
 
 # the modem beside the system: its firmware, file systems, IPA, SIM, NAS [needs fw-modem/ from the phone] [requires CONFIG_UFS=2]
@@ -868,6 +937,9 @@ CONFIG_MODEM_AGAIN=y
 
 # read by hakios.mpss.c (kernel)
 # CONFIG_MODEM_IPA_NO_PROBE is not set
+
+# read by hakios.mpss.c (kernel)
+# CONFIG_MODEM_IPA_QMI is not set
 
 # read by hakios.mpss.c (kernel)
 # CONFIG_MODEM_IPA_QUIET is not set
@@ -1138,7 +1210,7 @@ CONFIG_MODEM_AGAIN=y
 # CONFIG_UFS_PROBE is not set
 
 #
-# User space (35)
+# User space (36)
 #
 
 # read by inject_tweaks.c (user space)
@@ -1190,9 +1262,12 @@ CONFIG_MODEM_AGAIN=y
 # CONFIG_METAL_ALL is not set
 
 # read by HakiosMetalCA.m (user space)
+# CONFIG_METAL_COVER is not set
+
+# read by HakiosMetalCA.m (user space)
 # CONFIG_METAL_DUMP is not set
 
-# each draw of a sysmem pass timed alone, by program (only sysmem passes are: without metal_gmem=1)
+# the draws of a heavy GMEM pass listed (program, blending, attachments, corners), nothing timed alone
 # CONFIG_METAL_FPS is not set
 
 # read by HakiosMetalCA.m (user space)

@@ -1,7 +1,9 @@
 /*
  * The modem of the SM7325 phone, started, and asked about the network: step 1 of
  * cellular. Every address below belongs to this phone, and nothing here is touched unless a
- * boot-arg asks for it.
+ * boot-arg asks for it. The Xiaomi Mi 9 (cepheus, SM8150) too: the board table ("which phone",
+ * below) has what differs; there the modem is started for the Wi-Fi's firmware it runs (its WLAN
+ * PD), and stays offline (modem_online=0).
  *
  * The modem ("MPSS", Android's "modem") is a Hexagon of its own inside the SoC, exactly as the
  * Wi-Fi's and the audio's are (hakios.wifi.c, hakios.adsp.c): it stays in reset until somebody
@@ -69,6 +71,7 @@
 #include <mach/vm_param.h>
 #include <vm/memory_types.h>
 #include <pexpert/pexpert.h>
+#include <pexpert/device_tree.h>
 #include <sys/errno.h>
 #include <sys/kauth.h>
 #include <sys/stat.h>
@@ -112,6 +115,69 @@ static void rmtfs_stop(void);
 
 #define STEPS                   11
 #define HAKIOS_SOC_BASE        0x00400000ul    /* where the loader says the phone's peripherals begin */
+
+/* ---- which phone ---------------------------------------------------------------------------------- */
+
+/*
+ * What differs between the two phones (/arm-io's device_type, as the loader writes it; sm7325 the default),
+ * as hakios.adsp.c has it for the audio DSP:
+ *
+ *   sm7325   SM7325: the shared memory at 0x80900000; the modem's memory mpss@8b800000, 246 MB; the doorbells are
+ *            IPCC's (client 2 MPSS, signals 0 GLINK and 2 SMP2P; the always-on processor client 0); the command
+ *            database at 0x80860000; the RMTFS buffer 2.5 MB at 0x9c700000 (in cdsp@...), shared with the modem and
+ *            its navigation side; the IPA (4.11) runs beside it
+ *   cepheus  SM8150 (the Xiaomi Mi 9; dt of the phone): the shared memory smem@86000000; the modem's memory
+ *            modem_region@8e000000, 150 MB (modem.b01 .. b31 of MPSS.HE.1.0.c3 span exactly 0x8e000000 .. 0x97600000);
+ *            no IPCC: the doorbells are bits of the APCS's IPC register 0x17c0000c (qcom,glink/modem mboxes
+ *            <apcs_glb 12>, qcom,smp2p-modem qcom,ipc <syscon@17c0000c 0 14>, the always-on processor bit 0), and the
+ *            modem's own rings (GIC SPIs 449 and 451) are not taken: its words are looked for in the shared memory;
+ *            the command database where AOP's message RAM says (0xc3f000c); the RMTFS buffer 3 MB (dt:
+ *            qcom,rmtfs_sharedmem reg <0 0x300000>, allocated anywhere below 4 GB, no qcom,vm-nav-path: HLOS and
+ *            MSS only) at 0xa8800000, memory the firmware leaves free (xl memmap: 0xa8800000 .. 0xb0000000, type 7)
+ *            outside the kernel's (0xf6000000 ..) and every reservation of the device tree; GLINK's descriptor
+ *            (478) and our queue (479) are ours to make, as on the audio DSP; the IPA is 4.1, which the IPA code
+ *            below (4.11) does not know: left out (no firmware, no item 497, no QMI service; our SMP2P entry
+ *            "ipa" says "valid, clock off", so the modem keeps away from it). The rest -- TrustZone's image 4, the
+ *            items 435/428/421, the rails cx.lvl and mss.lvl at 384, the always-on processor's mailbox at
+ *            0xc300000, the sequencer at 0x18220000, the shared memory's lock at 0x1f43000 -- is the same.
+ *            On the phone (2026-11-06, modem_step=10, logs/214755-run.log): TrustZone takes and starts the image, the
+ *            modem says "up" after 2.2 s, GLINK and QRTR answer (44 services), it reads its file systems (no writes),
+ *            reads wlanmdsp.mbn over TFTP, and WLFW (service 69) appears 11.6 s after the start; stopped when asked.
+ */
+static const struct mpss_board {
+	const char *    name;
+	uint32_t        smem_phys;
+	uint32_t        cmd_db;                 /* the command database; 0: where AOP's message RAM (0xc3f000c) says */
+	uint32_t        memory, memory_size;    /* the modem's reserved memory */
+	uint32_t        apcs;                   /* 0: IPCC's doorbells; else the APCS IPC register the doorbells are bits of */
+	uint8_t         apcs_glink, apcs_smp2p, apcs_aop;
+	uint32_t        rmtfs_pa, rmtfs_size;   /* the buffer for the modem's file systems */
+	bool            nav;                    /* the buffer is shared with the modem's navigation side as well */
+	bool            ipa;                    /* the IPA code of this file is for this phone's IPA */
+	bool            glink_items;            /* GLINK's items 478 and 479 are made here when they are not there */
+} mpss_boards[] = {
+	{ "sm7325", 0x80900000u, 0x80860000u, 0x8b800000u, 0x0f600000u, 0, 0, 0, 0, 0x9c700000u, 0x280000u, true, true, false },
+	{ "cepheus", 0x86000000u, 0, 0x8e000000u, 0x09600000u, 0x17c0000cu, 12, 14, 0, 0xa8800000u, 0x300000u, false, false, true },
+};
+static const struct mpss_board *board = &mpss_boards[0];
+
+static void
+choose_board(void)
+{
+	DTEntry entry;
+	void const *prop;
+	unsigned int size;
+
+	if (SecureDTLookupEntry(NULL, "/arm-io", &entry) != kSuccess ||
+	    SecureDTGetProperty(entry, "device_type", &prop, &size) != kSuccess) {
+		return;
+	}
+	for (unsigned i = 0; i < sizeof(mpss_boards) / sizeof(mpss_boards[0]); i++) {
+		if (strncmp((const char *)prop, mpss_boards[i].name, size) == 0) {
+			board = &mpss_boards[i];
+		}
+	}
+}
 
 static uint32_t last_step, pause_ms = 2200, listen_seconds = 3;
 static uint32_t step;                   /* the one being performed */
@@ -614,6 +680,34 @@ static struct block aoss = { "mailbox", 0x0c300000, 0x400 };
 #define IPCC_SMP2P              2u
 
 static struct block ipcc = { "ipcc", 0x00408000, 0x1000 };
+static struct block apcs = { "apcs ipc", 0, 0x4 };     /* (board->apcs) */
+
+enum ring { RING_GLINK, RING_SMP2P, RING_AOP };
+
+/* The doorbells mapped: IPCC, or the APCS's IPC register */
+static void
+need_doorbells(void)
+{
+	if (board->apcs == 0) {
+		need(&ipcc);
+	} else {
+		apcs.phys = board->apcs;
+		need(&apcs);
+	}
+}
+
+/* Ring the modem (GLINK, SMP2P) or the always-on processor */
+static void
+ring(enum ring what)
+{
+	need_doorbells();
+	if (board->apcs == 0) {
+		wr(ipcc.base + IPCC_SEND, what == RING_AOP ? IPCC_AOP << 16 | 0 :
+		    IPCC_MPSS << 16 | (what == RING_GLINK ? IPCC_GLINK : IPCC_SMP2P));
+	} else {
+		wr(apcs.base, 1u << (what == RING_AOP ? board->apcs_aop : what == RING_GLINK ? board->apcs_glink : board->apcs_smp2p));
+	}
+}
 
 static struct {
 	uint32_t glink, smp2p, said;
@@ -628,6 +722,9 @@ static struct {
 static void
 doorbells(void)
 {
+	if (board->apcs != 0) {
+		return;         /* (SM8150: the modem's rings are interrupts of the GIC, not looked at; the head of the board table) */
+	}
 	for (unsigned i = 0; i < 8; i++) {
 		uint32_t who = rd(ipcc.base + IPCC_RECEIVED);
 
@@ -664,7 +761,7 @@ mailbox_wait(uint32_t offset, uint32_t value, uint32_t ms)
 static void
 ring_aop(void)
 {
-	wr(ipcc.base + IPCC_SEND, IPCC_AOP << 16 | 0);
+	ring(RING_AOP);
 }
 
 /* Linux's qmp_open(), as hakios.wifi.c does it; what is done already is found done. Under the mailbox's lock. */
@@ -674,7 +771,7 @@ mailbox_open(void)
 	uint32_t box, size;
 
 	need(&aoss);
-	need(&ipcc);
+	need_doorbells();
 	if (get(&aoss, "magic", QMP_MAGIC) != QMP_MAGIC_VALUE || get(&aoss, "version", QMP_VERSION) != 1) {
 		printf("mpss: %u: not a mailbox this knows\n", step);
 		return false;
@@ -764,6 +861,13 @@ out:
 	return sent;
 }
 
+/* A message to the always-on processor for another driver (the Mi 9's Wi-Fi: its "qdss" clock); under the mailbox's lock. */
+bool
+hakios_mpss_aop(const char *text)
+{
+	return mailbox_send(text);
+}
+
 /* ---- RPMh: the DSP's two rails, asked for while it boots ------------------------------------------------ */
 
 /*
@@ -784,6 +888,7 @@ out:
 #define CMD_DB_PHYS_DEFAULT     0x80860000u   /* dt: reg of /reserved-memory/cmd_db */
 static uint32_t cmd_db_phys = CMD_DB_PHYS_DEFAULT;
 #define CMD_DB_SIZE             0x20000UL
+#define CMD_DB_POINTER_PHYS     0x0c3f0000UL    /* AOP's message RAM: at 0xc, where the command database is (cepheus) */
 
 struct cmd_db_slave {
 	uint16_t id, header_offset, data_offset, count, version, reserved[3];
@@ -826,7 +931,17 @@ rail_position(const char *name, uint32_t level, uint32_t *address)
 	char id[8] = { 0 };
 
 	if (cmd_db == NULL) {
-		cmd_db = (const struct cmd_db_header *)ml_io_map_unmappable(cmd_db_phys, CMD_DB_SIZE, VM_WIMG_WCOMB);
+		uint32_t at = cmd_db_phys;
+
+		if (at == 0) {
+			/* (cepheus: qcom,cmd-db@c3f000c, the word AOP leaves at 0xc of its message RAM) */
+			at = rd(ml_io_map(CMD_DB_POINTER_PHYS, 0x1000) + 0xc);
+			printf("mpss: %u: AOP says the command database is at %#x\n", step, at);
+			if (at == 0) {
+				return -1;
+			}
+		}
+		cmd_db = (const struct cmd_db_header *)ml_io_map_unmappable(at, CMD_DB_SIZE, VM_WIMG_WCOMB);
 	}
 	if (!(cmd_db->magic[0] == 0xdb && cmd_db->magic[1] == 0x30 && cmd_db->magic[2] == 0x03 && cmd_db->magic[3] == 0x0c)) {
 		printf("mpss: %u: the boot loader's command database is not there\n", step);
@@ -1026,7 +1141,9 @@ step_survey(void)
 	struct smp2p words;
 	uint32_t size = 0;
 
-	announce("read our partition with the modem in the shared memory (0x80900000), and its items");
+	printf("mpss: %u: the phone is %s: the shared memory at %#x, the modem's memory %#x (%u MB), doorbells %s\n", step,
+	    board->name, smem_phys, board->memory, board->memory_size >> 20, board->apcs ? "by the APCS's IPC register" : "by IPCC");
+	announce("read our partition with the modem in the shared memory, and its items");
 	show_partition();
 	if (dsp_words(&words)) {
 		show_words("the DSP's item (435) is there: it has run since the phone was started", &words);
@@ -1037,16 +1154,22 @@ step_survey(void)
 	    smem_item(ITEM_SMP2P_OURS, &size) ? "there" : "not there", smem_item(478, &size) ? "there" : "NOT THERE",
 	    smem_item(479, &size) ? "there" : "NOT THERE", smem_item(480, &size) ? "there" : "not there (the DSP makes it)");
 	show_crash_reason();
-	need(&ipcc);
-	printf("mpss: %u: the doorbells say %#x\n", step, rd(ipcc.base + IPCC_RECEIVED));
-	return smem_partition(SMEM_US, SMEM_MPSS, &size, &size) != 0;
+	if (board->apcs == 0) {
+		need(&ipcc);
+		printf("mpss: %u: the doorbells say %#x\n", step, rd(ipcc.base + IPCC_RECEIVED));
+	}
+	if (smem_partition(SMEM_US, SMEM_MPSS, &size, &size) == 0) {
+		printf("mpss: %u: THERE IS NO PARTITION OF OURS WITH THE MODEM in the shared memory\n", step);
+		return false;
+	}
+	return true;
 }
 
 /* ---- step 2: the firmware -------------------------------------------------------------------------- */
 
 #define MPSS_MEMORY_DEFAULT     0x8b800000u   /* dt: reserved-memory mpss@..., memory-region of qcom,mss */
 static uint32_t mpss_memory = MPSS_MEMORY_DEFAULT;
-#define MPSS_MEMORY_SIZE        0x0f600000u
+#define MPSS_MEMORY_SIZE        (board->memory_size)    /* (the board table) */
 #define PAS_MPSS_DEFAULT        4               /* dt: qcom,pas-id of qcom,mss */
 static uint32_t pas_mpss = PAS_MPSS_DEFAULT;
 
@@ -1363,7 +1486,7 @@ dsp_listen(const struct smp2p *theirs)
 		    step, theirs->flags, smp2p_restart_acked);
 		smem_poke(our_item + SMP2P_AT_FLAGS, (ours.flags & ~SMP2P_RESTART_ACK) | (smp2p_restart_acked ? SMP2P_RESTART_ACK : 0));
 		settle();
-		wr(ipcc.base + IPCC_SEND, IPCC_MPSS << 16 | IPCC_SMP2P);
+		ring(RING_SMP2P);
 	}
 }
 
@@ -1394,14 +1517,14 @@ dsp_ask_to_stop(uint32_t bound_ms)
 		printf("mpss: %u: the DSP is not asked to stop first: its entry says %#x, not \"up\"\n", step, state);
 		return false;
 	}
-	need(&ipcc);
+	need_doorbells();
 	value_at = at + SMP2P_AT_VALUE((uint32_t)entry);
 	printf("mpss: %u: about to ask the DSP to stop: bit 0 of our entry \"%s\" at %#lx, and its SMP2P doorbell\n", step,
 	    OUR_ENTRY_STOP, smem_phys + value_at);
 	snprintf(last_write, sizeof(last_write), "step %u asked the modem to stop", step);
 	smem_poke(value_at, ours.entry[entry].value | DSP_STOP);
 	settle();
-	wr(ipcc.base + IPCC_SEND, IPCC_MPSS << 16 | IPCC_SMP2P);
+	ring(RING_SMP2P);
 	asked = now = now_us();
 	while (now - asked < bound_ms * 1000ull) {
 		if (dsp_words(&theirs) && (dsp_state(&theirs) & (DSP_STOP_ACK | DSP_FATAL))) {
@@ -1416,7 +1539,7 @@ dsp_ask_to_stop(uint32_t bound_ms)
 	    (now - asked) % 1000, state);
 	smem_poke(value_at, ours.entry[entry].value & ~DSP_STOP);
 	settle();
-	wr(ipcc.base + IPCC_SEND, IPCC_MPSS << 16 | IPCC_SMP2P);
+	ring(RING_SMP2P);
 	return (state & DSP_STOP_ACK) != 0;
 }
 
@@ -1448,9 +1571,11 @@ dsp_shutdown(const char *why)
 	if (!leaving) {
 		rmtfs_share(false);
 	}
-	need(&ipcc);
-	wr(ipcc.base + IPCC_DISABLE, IPCC_MPSS << 16 | IPCC_SMP2P);
-	doorbells();
+	if (board->apcs == 0) {
+		need(&ipcc);
+		wr(ipcc.base + IPCC_DISABLE, IPCC_MPSS << 16 | IPCC_SMP2P);
+		doorbells();
+	}
 	dsp_started = false;
 	mailbox_send("{class: image, res: load_state, name: modem, val: off}");
 	if (rails_asked) {
@@ -1680,6 +1805,42 @@ out:
 
 static void glink_reset(void);
 
+/*
+ * GLINK's descriptor (478: four words each way, zeroed) and our queue (479, 16 KB), made in our partition with
+ * the modem where they are not there, as Linux's qcom_glink_smem_register() makes them (and hakios.adsp.c on the
+ * same phone): on SM8150 nobody before us has made them. The modem makes its own queue (480).
+ */
+#define GLINK_DESCRIPTOR_BYTES  32
+#define GLINK_OUR_QUEUE_BYTES   16384
+
+static bool
+glink_items(uint32_t partition)
+{
+	static const struct { uint32_t item, bytes; const char *what; } want[2] = {
+		{ 478, GLINK_DESCRIPTOR_BYTES, "GLINK's descriptor" }, { 479, GLINK_OUR_QUEUE_BYTES, "GLINK's queue of ours" },
+	};
+	uint32_t size = 0;
+
+	for (unsigned i = 0; i < 2; i++) {
+		uint32_t at = smem_item(want[i].item, &size);
+
+		if (at != 0) {
+			printf("mpss: %u: %s (%u) is there, %u bytes at %#x\n", step, want[i].what, want[i].item, size, smem_phys + at);
+			continue;
+		}
+		if (!our_item_make(partition, want[i].item, want[i].bytes)) {
+			return false;
+		}
+		at = smem_item(want[i].item, &size);
+		if (at == 0 || size < want[i].bytes || (uint64_t)at + size > SMEM_SIZE) {
+			printf("mpss: %u: %s (%u) IS NOT FOUND as it was just made\n", step, want[i].what, want[i].item);
+			return false;
+		}
+		printf("mpss: %u: %s (%u) made: %u bytes at %#x\n", step, want[i].what, want[i].item, size, smem_phys + at);
+	}
+	return true;
+}
+
 static bool
 step_our_item(void)
 {
@@ -1727,7 +1888,8 @@ step_our_item(void)
 	 * driver here). Off unless modem_ipa=1 (valid, off) or 3 (on): with the entry the run of 23 October hung.
 	 */
 	{
-		uint32_t ipa = 3;                       /* (the modem's IPA driver waits for this entry to exist: see the IPA's handshake) */
+		uint32_t ipa = board->ipa ? 3 : 1;      /* (the modem's IPA driver waits for this entry to exist: see the IPA's handshake;
+		                                         * where the IPA is not run, "valid, clock off") */
 
 		PE_parse_boot_argn("modem_ipa", &ipa, sizeof(ipa));
 		if (ipa != 0) {
@@ -1746,8 +1908,7 @@ step_our_item(void)
 	smem_poke(our_item + SMP2P_AT_VERSION, SMP2P_RESTART_ACKS << 8 | SMP2P_VERSION);
 	settle();
 	smp2p_agreed = smp2p_restart_acks = smp2p_restart_acked = false;
-	need(&ipcc);
-	wr(ipcc.base + IPCC_SEND, IPCC_MPSS << 16 | IPCC_SMP2P);
+	ring(RING_SMP2P);
 	if (!smem_peek(our_item, &ours, sizeof(ours)) || ours.magic != SMP2P_MAGIC || smp2p_entry(&ours, OUR_ENTRY_STOP) < 0) {
 		printf("mpss: %u: OUR ITEM DOES NOT READ BACK AS WRITTEN\n", step);
 		return false;
@@ -1763,7 +1924,7 @@ step_our_item(void)
 	 * (modem_ipa_item=0: not; our SMMU context maps all of DDR, so the item needs no mapping of its own).
 	 */
 	{
-		uint32_t ipa_item = 497, ipa_size = 0;
+		uint32_t ipa_item = board->ipa ? 497 : 0, ipa_size = 0;         /* (none where the IPA is not run) */
 
 		PE_parse_boot_argn("modem_ipa_item", &ipa_item, sizeof(ipa_item));
 		if (ipa_item != 0) {
@@ -1775,6 +1936,9 @@ step_our_item(void)
 				printf("mpss: %u: the IPA's item %u could not be made\n", step, ipa_item);
 			}
 		}
+	}
+	if (board->glink_items && !glink_items(partition)) {
+		return false;
 	}
 	glink_reset();
 	return true;
@@ -2429,16 +2593,21 @@ step_start(void)
 	have = dsp_words(&last);
 	announce("listen for the modem's doorbells, ask RPMh for its rails, tell the always-on processor that its image is "
 	    "loaded, and ask TrustZone to authenticate the image and let the DSP out of reset");
-	need(&ipcc);
-	for (unsigned i = 0; i < 8 && (rang = rd(ipcc.base + IPCC_RECEIVED)) != IPCC_NOBODY && rang >> 16 == IPCC_MPSS; i++) {
-		put(&ipcc, "heard", IPCC_CLEAR, rang);
+	if (board->apcs == 0) {
+		need(&ipcc);
+		for (unsigned i = 0; i < 8 && (rang = rd(ipcc.base + IPCC_RECEIVED)) != IPCC_NOBODY && rang >> 16 == IPCC_MPSS; i++) {
+			put(&ipcc, "heard", IPCC_CLEAR, rang);
+		}
+		put(&ipcc, "listened for", IPCC_ENABLE, IPCC_MPSS << 16 | IPCC_SMP2P);
+		put(&ipcc, "listened for", IPCC_ENABLE, IPCC_MPSS << 16 | IPCC_GLINK);
+	} else {
+		need_doorbells();
+		printf("mpss: %u: (SM8150: no doorbells to listen for: the modem's words are looked for in the shared memory)\n", step);
 	}
-	put(&ipcc, "listened for", IPCC_ENABLE, IPCC_MPSS << 16 | IPCC_SMP2P);
-	put(&ipcc, "listened for", IPCC_ENABLE, IPCC_MPSS << 16 | IPCC_GLINK);
 	bzero(&doorbell, sizeof(doorbell));
 	lck_mtx_lock(&dsp_lock);
 	{
-		uint32_t ipa_fw = 1;
+		uint32_t ipa_fw = board->ipa ? 1 : 0;
 
 		PE_parse_boot_argn("modem_ipa_fw", &ipa_fw, sizeof(ipa_fw));
 		ipa_loaded = ipa_fw != 0 && ipa_firmware_load();
@@ -2728,7 +2897,7 @@ glink_put(const void *first, uint32_t first_length, const void *second, uint32_t
 	settle();
 	smem_poke(glink.descriptor + GLINK_OUR_HEAD, (head + padded) % glink.ours_size);
 	settle();
-	wr(ipcc.base + IPCC_SEND, IPCC_MPSS << 16 | IPCC_GLINK);
+	ring(RING_GLINK);
 	glink.said++;
 	return true;
 }
@@ -2959,7 +3128,7 @@ glink_pump(void)
 		}
 		case GLINK_READ_NOTIFY:
 			glink_advance(length);
-			wr(ipcc.base + IPCC_SEND, IPCC_MPSS << 16 | IPCC_GLINK);
+			ring(RING_GLINK);
 			break;
 		case GLINK_CLOSE:
 			glink_advance(length);
@@ -3549,7 +3718,7 @@ link_stop(void)
 #define RMTFS_VERSION           1
 #define RMTFS_INSTANCE          0
 #define RMTFS_SECTOR            512
-#define RMTFS_BUFFER_SIZE       0x280000u       /* dt: reg of qcom,rmtfs_sharedmem@0 */
+#define RMTFS_BUFFER_SIZE       (board->rmtfs_size)     /* dt: reg of qcom,rmtfs_sharedmem@0 (the board table) */
 #define RMTFS_OPEN              1
 #define RMTFS_CLOSE             2
 #define RMTFS_RW_IOVEC          3
@@ -3626,7 +3795,8 @@ rmtfs_load(void)
  * no-map: nothing of ours uses it, and the CDSP is never started here), through an uncached
  * window, as the modem reads it.
  */
-#define RMTFS_BUFFER_PA_DEFAULT 0x9c700000ull   /* dt: a window into reserved-memory cdsp@... (the CDSP is not started here) */
+#define RMTFS_BUFFER_PA_DEFAULT ((uint64_t)board->rmtfs_pa)    /* sm7325: a window into reserved-memory cdsp@... (the CDSP
+	                                                         * is not started here); cepheus: free memory (the board table) */
 
 static bool
 rmtfs_buffer_make(void)
@@ -3646,17 +3816,19 @@ rmtfs_buffer_make(void)
 		*(volatile uint64_t *)(rmtfs_window + i) = 0;
 	}
 	settle();
-	printf("mpss: %u: the modem's buffer: %u bytes at %#llx (the compute DSP's memory, unused here)\n", step, RMTFS_BUFFER_SIZE,
-	    rmtfs_buffer_pa);
+	printf("mpss: %u: the modem's buffer: %u bytes at %#llx (%s)\n", step, RMTFS_BUFFER_SIZE, rmtfs_buffer_pa,
+	    board->ipa ? "the compute DSP's memory, unused here" : "memory the firmware leaves free, outside the kernel's");
 	return true;
 }
 
 /*
- * TrustZone asked to let the modem into the buffer (Linux's qcom_scm_assign_mem(): the memory, who
- * has it now, who is to have it and how), or, with `in` false, out of it again.
+ * TrustZone asked to hand memory from one set of owners to another (Linux's qcom_scm_assign_mem(): the memory, who
+ * has it now, who is to have it, each with read and write). 0, or an errno; `answer` is TrustZone's own word. Also
+ * for the Wi-Fi of the Mi 9, whose firmware's memory (MSA) goes to the modem and the WLAN (hakios.wcn3990.c).
  */
-static bool
-rmtfs_share(bool in)
+int
+hakios_mpss_assign(uint64_t address, uint64_t size, const uint32_t *from, unsigned from_count, const uint32_t *to,
+    unsigned to_count, uint64_t *answer_out)
 {
 	struct {
 		uint64_t address, size;                 /* +0: the memory */
@@ -3673,54 +3845,63 @@ rmtfs_share(bool in)
 	} *page;
 	vm_offset_t memory = 0;
 	uint64_t answer = ~0ull, pa;
-	unsigned sources, destinations;
 	int32_t result;
 
-	if (rmtfs_buffer == 0 || rmtfs_shared == in) {
-		return rmtfs_buffer != 0;
+	if (from_count == 0 || from_count > 3 || to_count == 0 || to_count > 3) {
+		return EINVAL;
 	}
 	if (kmem_alloc(kernel_map, &memory, PAGE_SIZE, KMA_KOBJECT | KMA_ZERO | KMA_DATA, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
-		return false;
+		return ENOMEM;
 	}
 	page = (void *)memory;
-	page->address = rmtfs_buffer_pa;
-	page->size = RMTFS_BUFFER_SIZE;
-	if (in) {
-		page->sources[0] = VMID_HLOS;
-		sources = 1;
-		page->destinations[0].vmid = VMID_HLOS;
-		page->destinations[0].permission = VM_PERM_RW;
-		page->destinations[1].vmid = VMID_MSS_MSA;
-		page->destinations[1].permission = VM_PERM_RW;
-		page->destinations[2].vmid = VMID_NAV;
-		page->destinations[2].permission = VM_PERM_RW;
-		destinations = option("modem_no_nav") ? 2 : 3;
-	} else {
-		page->sources[0] = VMID_HLOS;
-		page->sources[1] = VMID_MSS_MSA;
-		page->sources[2] = VMID_NAV;
-		sources = option("modem_no_nav") ? 2 : 3;
-		page->destinations[0].vmid = VMID_HLOS;
-		page->destinations[0].permission = VM_PERM_RW;
-		destinations = 1;
+	page->address = address;
+	page->size = size;
+	for (unsigned i = 0; i < from_count; i++) {
+		page->sources[i] = from[i];
+	}
+	for (unsigned i = 0; i < to_count; i++) {
+		page->destinations[i].vmid = to[i];
+		page->destinations[i].permission = VM_PERM_RW;
 	}
 	pa = kvtophys(memory);
-	page->more[0] = sources * 4;                                    /* argument 3: the size of the sources */
+	page->more[0] = from_count * 4;                                 /* argument 3: the size of the sources */
 	page->more[1] = pa + 128;                                       /* 4: the destinations */
-	page->more[2] = destinations * sizeof(page->destinations[0]);   /* 5: their size */
+	page->more[2] = to_count * sizeof(page->destinations[0]);       /* 5: their size */
 	page->more[3] = 0;                                              /* 6: spare */
 	for (vm_offset_t line = memory; line < memory + PAGE_SIZE; line += 64) {
 		__asm__ volatile ("dc civac, %0" : : "r" (line));
 	}
 	settle();
+	result = scm("to hand the memory over", SCM_MP_ASSIGN, SCM_ASSIGN_ARGUMENTS, pa, 16, pa + 64, pa + 240, &answer);
+	kmem_free(kernel_map, memory, PAGE_SIZE);
+	if (answer_out != NULL) {
+		*answer_out = answer;
+	}
+	return result != 0 || answer != 0 ? EPERM : 0;
+}
+
+/*
+ * TrustZone asked to let the modem into the buffer, or, with `in` false, out of it again (the navigation side
+ * as well where the board has one).
+ */
+static bool
+rmtfs_share(bool in)
+{
+	const uint32_t everyone[3] = { VMID_HLOS, VMID_MSS_MSA, VMID_NAV }, hlos = VMID_HLOS;
+	unsigned count = !board->nav || option("modem_no_nav") ? 2 : 3;
+	uint64_t answer = ~0ull;
+	int error;
+
+	if (rmtfs_buffer == 0 || rmtfs_shared == in) {
+		return rmtfs_buffer != 0;
+	}
 	announce(in ? "ask TrustZone to let the modem into our buffer for its files (the memory assigned to HLOS and MSS, both "
 	    "read and write)" : "ask TrustZone to take the buffer back from the modem (assigned to HLOS alone)");
-	result = scm(in ? "to share the buffer with the modem" : "to take the buffer back", SCM_MP_ASSIGN, SCM_ASSIGN_ARGUMENTS, pa, 16,
-	    pa + 64, pa + 240, &answer);
-	kmem_free(kernel_map, memory, PAGE_SIZE);
-	if (result != 0 || answer != 0) {
-		printf("mpss: %u: TRUSTZONE DOES NOT %s: the call returns %d, its answer is %#llx\n", step, in ? "SHARE THE BUFFER" :
-		    "TAKE THE BUFFER BACK", result, answer);
+	error = in ? hakios_mpss_assign(rmtfs_buffer_pa, RMTFS_BUFFER_SIZE, &hlos, 1, everyone, count, &answer) :
+	    hakios_mpss_assign(rmtfs_buffer_pa, RMTFS_BUFFER_SIZE, everyone, count, &hlos, 1, &answer);
+	if (error != 0) {
+		printf("mpss: %u: TRUSTZONE DOES NOT %s: error %d, its answer is %#llx\n", step, in ? "SHARE THE BUFFER" :
+		    "TAKE THE BUFFER BACK", error, answer);
 		return false;
 	}
 	rmtfs_shared = in;
@@ -4556,7 +4737,7 @@ jsn_string(const char *from, const char *end, const char *key, char *out, size_t
 static void
 servreg_load(void)
 {
-	static const char *const files[] = { "modemr.jsn", "adspr.jsn", "adsps.jsn", "adspua.jsn", "battmgr.jsn", "cdspr.jsn", "wpssr.jsn" };
+	static const char *const files[] = { "modemr.jsn", "modemuw.jsn", "adspr.jsn", "adsps.jsn", "adspua.jsn", "battmgr.jsn", "cdspr.jsn", "wpssr.jsn" };
 
 	servreg_maps = 0;
 	for (unsigned f = 0; f < sizeof(files) / sizeof(files[0]); f++) {
@@ -4670,9 +4851,15 @@ servreg_receive(__unused void *context, uint32_t node, uint32_t port, const void
 		}
 		printf("mpss: servreg: the modem asks where \"%s\" is: %u domain%s\n", wanted, found, found == 1 ? "" : "s");
 	} else if (message == SERVREG_PFR) {
+		const uint8_t *reason;
+		uint16_t reason_size = 0;
+
+		/* (Linux's servreg_loc_pfr_req: TLV 1 the service, TLV 2 the reason, each a string) */
 		value = qmi_tlv(m, length, 1, &size);
-		printf("mpss: servreg: the modem reports a failure of \"%.*s\"\n", value ? (int)(size < 63 ? size : 63) : 0,
-		    value ? (const char *)value : "");
+		reason = qmi_tlv(m, length, 2, &reason_size);
+		tell("mpss: servreg: THE MODEM REPORTS A FAILURE of \"%.*s\": \"%.*s\"\n", value ? (int)(size < 63 ? size : 63) : 0,
+		    value ? (const char *)value : "", reason ? (int)(reason_size < 256 ? reason_size : 256) : 0,
+		    reason ? (const char *)reason : "(no reason given)");
 	} else {
 		printf("mpss: servreg: a request this does not know (%#x)\n", message);
 		answer[10] = QMI_RESULT_FAILURE;
@@ -4966,8 +5153,8 @@ ipa_client_server(__unused void *context, bool arrived, uint32_t service, __unus
 static bool
 ipa_qmi_start(void)
 {
-	if (option("modem_no_ipa_qmi")) {
-		return false;
+	if (option("modem_no_ipa_qmi") || (!board->ipa && !option("modem_ipa_qmi"))) {
+		return false;   /* (where the IPA is not run, no IPA service either unless modem_ipa_qmi=1) */
 	}
 	if (ipa_host_port == NULL) {
 		ipa_host_port = qrtr_open(ipa_host_receive, NULL, NULL);
@@ -6019,7 +6206,7 @@ sim_probe_close(void)
 static bool
 step_nas(void)
 {
-	uint32_t wait_seconds = 90, online = 1;
+	uint32_t wait_seconds = 90, online = board->ipa ? 1 : 0;      /* (cepheus: the modem is there for the Wi-Fi, offline) */
 	uint64_t began, asked_online = 0;
 	bool registered = false, is_online = false, probed = option("modem_sim_probe_off"), probed_again = false;
 	uint64_t probed_at = 0, watched_at = 0, data_deadline = 0;
@@ -6334,7 +6521,7 @@ soc_override(void)
 	PE_parse_boot_argn("soc_ipa_stream_uc", &ipa_stream_uc, sizeof(ipa_stream_uc));
 	PE_parse_boot_argn("soc_pas_mpss", &pas_mpss, sizeof(pas_mpss));
 	PE_parse_boot_argn("soc_pas_ipa", &pas_ipa, sizeof(pas_ipa));
-	if (said != 0 || smem_phys != SMEM_PHYS_DEFAULT || mpss_memory != MPSS_MEMORY_DEFAULT) {
+	if (said != 0 || smem_phys != board->smem_phys || mpss_memory != board->memory) {
 		printf("mpss: SoC addresses from boot-args: %u register blocks; shared memory %#x, command DB %#x, the modem's "
 		    "memory %#x, the SoC's internal memory %#x\n", said, smem_phys, cmd_db_phys, mpss_memory, ipa_imem);
 	}
@@ -6355,6 +6542,10 @@ hakios_mpss_init(void)
 		printf("mpss: modem=1 and modem_step=N are for the phone's modem, and this is not the phone\n");
 		return;
 	}
+	choose_board();
+	smem_phys = board->smem_phys;
+	cmd_db_phys = board->cmd_db;
+	mpss_memory = board->memory;
 	soc_override();
 	if (last_step == 0) {
 		/* all of it, on a thread of its own, and left up */

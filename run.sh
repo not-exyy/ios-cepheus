@@ -2,7 +2,7 @@
 # HakiOS: start iOS 16.5 on the Xiaomi Mi 9. Nothing is flashed by this: U-Boot, the loader and the kernel go into RAM
 # (fastboot boot), and after an ordinary reboot the phone is what it was.
 #
-#   ./run.sh SCENARIO [ram] [again]
+#   ./run.sh SCENARIO [ram] [nowifi] [again]
 #
 #   SCENARIO   gl      every driver (touch, keys, GPU, sound, vibration, battery, CPU clocks, temperature), drawn by the
 #                      GPU through OpenGL ES                                                         <- start with this
@@ -14,6 +14,8 @@
 #              the sound server among them, so from RAM there is no sound and no vibration, and metal is refused
 #              (its shaders do not fit in that image either). basic and gl (picture, touch, keys, GPU) work.
 #              Without it: iOS from the "darwin" partition (./setup.sh install), /private/var kept there: everything
+#   nowifi     without Wi-Fi (gl and metal from the flash have it: the network is chosen in Settings > Wi-Fi). For Wi-Fi
+#              the modem's processor is started, offline: the radio is driven by it; no SIM, no calls, no mobile data
 #   again      the phone is still in the HakiOS loader from the run before and the image is already in its RAM: only start
 #
 #   XL_SECS=N        hand back to the loader after N seconds (default 0: never)
@@ -29,11 +31,12 @@ export PATH="$KIT/platform-tools:$PATH"
 export DEVICE=cepheus XL_HOME=fastboot XL_FIRMWARE=u-boot
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 1; }
-scenario= mode=flash again=
+scenario= mode=flash again= nowifi=
 for a in "$@"; do
 	case $a in
 	gl|metal|basic) scenario=$a ;;
 	ram) mode=ram ;;
+	nowifi) nowifi=1 ;;
 	again) again=1 ;;
 	*) usage ;;
 	esac
@@ -50,9 +53,12 @@ command -v fastboot >/dev/null ||
 #   haptic=5                      the vibration motor, for iOS
 #   adsp=1 sound=4                the audio DSP and the bottom speaker
 #   fuelgauge=2                   the battery's charge in the status bar (read only)
+#   backlight=2                   the screen's brightness: the slider in Control Center and in Settings
 #   enable_skstb sb_bind=0        SpringBoard's main thread on the fastest core
 #   metal=1 ca_metallib=...       CoreAnimation through Metal instead of OpenGL ES (beta)
-full="bootcpu=7 cpus=8 big_only=1 cpufreq=1 thermal=1 touchscreen=1 buttons=1 gpu=1 haptic=5 adsp=1 sound=4 fuelgauge=2 enable_skstb sb_bind=0"
+#   modem_* wcn_* wifi=1          Wi-Fi (the WCN3998 through the ath10k driver): the modem's processor started for the
+#                                 radio and kept offline, the network joined from Settings > Wi-Fi (flash only)
+full="bootcpu=7 cpus=8 big_only=1 cpufreq=1 thermal=1 touchscreen=1 buttons=1 gpu=1 haptic=5 adsp=1 sound=4 fuelgauge=2 backlight=2 enable_skstb sb_bind=0"
 case $scenario in
 gl) args=$full ;;
 metal)
@@ -61,12 +67,23 @@ metal)
 	args="$full metal=1 ca_metallib=/hakios/share/ca/QuartzCore-default.metallib" ;;
 basic) args="bootcpu=7 cpus=8 big_only=1" ;;
 esac
+wifi="modem_step=10 modem_new=11 modem_keep=1 modem_listen=3 wcn_lx=1 wcn_power=1 wifi_station=1 wifi=1"
+if [ $scenario != basic ] && [ $mode = flash ] && [ -z "$nowifi" ]; then
+	if [ -n "$again" ]; then
+		# seen on the phone (2026-11-07): a second kernel from the same loader does not get the modem's memory back
+		echo "== без Wi-Fi: после again модем второй раз не запускается; для Wi-Fi перезапустите телефон (Питание 15 с, затем fastboot)"
+	elif [ "$(cat "$KIT/work/wifi" 2>/dev/null)" = 1 ]; then
+		args="$args $wifi"
+	else
+		echo "== без Wi-Fi: flashboot.apfs собран без прошивки модема (./setup.sh firmware MIUI_ROM, затем ./setup.sh build IPSW)"
+	fi
+fi
 if [ $mode = ram ]; then
 	# seen on the phone (2026-11-06): from RAM, 203 programs killed for memory in 5 minutes, mediaserverd 18 times (no
 	# sound, no vibration: iOS plays the vibration through it too); metal's backboardd aborts again and again
 	# ("library not found": the framework shader libraries are left out of the RAM image, 176 MB)
 	[ $scenario = metal ] && { echo "metal из RAM не работает (шейдеры Metal не помещаются в образ RAM): ./run.sh metal — с флеша"; exit 1; }
-	[ $scenario = gl ] && echo "== из RAM: картинка, тач, кнопки и GPU работают; звука и вибро не будет (не хватает памяти), для них — с флеша"
+	[ $scenario = gl ] && echo "== из RAM: картинка, тач, кнопки и GPU работают; звука, вибро и Wi-Fi не будет (не хватает памяти), для них — с флеша"
 fi
 
 cd "$R"

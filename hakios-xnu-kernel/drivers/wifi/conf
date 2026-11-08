@@ -5,11 +5,23 @@
 driver WIFI
 	file    bsd/dev/hakios.wifi.c
 	file    bsd/dev/hakios.wlfw.c
+	requires QMI WLAN
+	help    Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, and Linux's ath11k
+	help    (its object, made by tools/mk-ath11k.sh, is linked in only with this) on WLAN. Needs fw-wifi/ from the phone
+
+driver WLAN
 	file    bsd/dev/hakios.lx.c
 	file    bsd/dev/hakios.sta.c
 	file    bsd/dev/hakios.apple80211.c
 	file    iokit/Kernel/hakios.wlan.cpp iokitcpp
-	requires QMI
-	help    Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, Linux's ath11k
-	help    (its object, made by tools/mk-ath11k.sh, is linked in only with this), a station, and the Apple80211
-	help    surface Darwin's wifid talks to. Needs fw-wifi/ from the phone
+	help    What a Linux Wi-Fi driver's object stands on in the kernel (hakios.lx.c: memory, threads, interrupts,
+	help    en0), a station, and the Apple80211 surface Darwin's wifid talks to. The radio's own side is a phone's
+	help    driver, which must be built with it: WIFI (the WCN6750, ath11k) or WCN3990 (the Mi 9's, ath10k)
+
+driver WCN3990
+	file    bsd/dev/hakios.wcn3990.c
+	requires WLAN
+	default n
+	help    Wi-Fi of the Xiaomi Mi 9 (cepheus): the WCN3998, whose firmware runs in the modem's WLAN PD (wcn_step=N): a
+	help    survey that only reads (1-3); the firmware's QMI service up to "FW READY" (4-7, with the modem); the radio's
+	help    SMMU stream, its supplies (wcn_power=1 only) and mission mode (8-10)

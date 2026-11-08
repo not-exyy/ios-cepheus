@@ -9,7 +9,6 @@
 # --- built from this repository -----------------------------------------------------------------------
 open     prebuilt/hakios-kernel                   the kernel, built from Apple's open xnu-8796.121.2 plus xnu/hakios.patch and xnu/files: APSL-2.0, corresponding source here and at Apple
 open     prebuilt/loader.efi                      the boot loader, built from xnuloader/loader.c: MIT
-open     prebuilt/userland/libOSMesa.8.dylib      Mesa's OpenGL ES library (MIT), built by tools/mk-mesa.sh from Mesa's source with tools/mesa/*.patch
 open     prebuilt/userland/*                      our programs and libraries, built from userland/src: MIT
 open     devices/sm7325/prebuilt/BootShim.bin   built from the shim of Mu-Silicium with our change (uefi/hakios.patch): BSD-2-Clause-Patent
 

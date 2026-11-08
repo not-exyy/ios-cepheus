@@ -44,6 +44,7 @@ void hakios_virtio_input_init(void);   /* boot-arg virtio_input=1: QEMU's virtio
 void hakios_goodix_init(void);         /* boot-arg touchscreen=1: the phone's Goodix or FocalTech touch screen */
 void hakios_stfts_init(void);          /* boot-arg touchscreen=1: the Mi 9's ST FingerTip touch screen */
 void hakios_buttons_init(void);        /* boot-arg buttons=1: the phone's power and volume keys */
+void hakios_backlight_init(void);      /* boot-arg backlight=N: the Mi 9 panel's brightness, and iOS's slider (drivers/gpu/hakios.backlight.c) */
 void hakios_ufs_init(void);           /* ufs=2 to xnuloader: the phone's storage, read only, through the loader (ufs_shared_pa=) */
 void hakios_ufs_report(const char *when); /* where reading the storage has spent its time so far */
 bool hakios_ufs_dev(dev_t dev);           /* one of the storage's devices */
@@ -84,7 +85,14 @@ void hakios_adreno_stop(void);         /* before that, where the ending is no pa
 void hakios_adreno_minute(void);       /* once a minute: a line about how warm the GPU is, if it is in use */
 void hakios_wifi_init(void);           /* boot-arg wifi=1: the phone's Wi-Fi; wifi_step=N: the first N steps of it */
 void hakios_adsp_init(void);           /* boot-arg adsp=1: the phone's audio DSP started and linked; adsp_step=N: the first N steps */
+void hakios_wcn3990_init(void);        /* boot-arg wcn_step=N: the Mi 9's Wi-Fi (WCN3998), the first N steps; stage 0 reads only */
+bool hakios_wcn3990_radio_map(uint64_t physical, uint64_t size, unsigned long long *address);   /* memory the Mi 9's radio is to see, through its SMMU stream */
 void hakios_mpss_init(void);           /* boot-arg modem=1: the phone's modem started and linked; modem_step=N: the first N steps */
+struct hakios_qrtr_ops;
+const struct hakios_qrtr_ops *hakios_mpss_qrtr(void);  /* the modem's QRTR once its channel is open; NULL before (or without MODEM) */
+int hakios_mpss_assign(uint64_t address, uint64_t size, const uint32_t *from, unsigned from_count, const uint32_t *to,
+    unsigned to_count, uint64_t *answer);                 /* TrustZone: memory handed from VMIDs to VMIDs; 0, or an errno */
+bool hakios_mpss_aop(const char *text);                /* a message to the always-on processor through the modem's mailbox */
 void hakios_wifi_stop(void);           /* where a run ends in order: the Wi-Fi DSP, if it was started, shut down */
 int hakios_wifi_say(const char *format, ...) __printflike(1, 2);      /* a line of the Wi-Fi steps' log */
 int hakios_wifi_tell(const char *format, ...) __printflike(1, 2);     /* ... one that is said even with wifi=1 */

@@ -2,7 +2,7 @@
 # HakiOS: iOS 16.5 userland on the Xiaomi Mi 9 (cepheus), one-time setup. Read README.md first.
 #
 #   ./setup.sh check                    what is installed on this Mac, and the room on its disk
-#   ./setup.sh firmware MIUI_ROM        the phone's own firmware (GPU, audio DSP) and its device tree, out of YOUR
+#   ./setup.sh firmware MIUI_ROM        the phone's own firmware (GPU, audio DSP, modem and Wi-Fi) and its device tree, out of YOUR
 #                                       MIUI fastboot ROM (a folder or the .tgz); nothing goes to the phone
 #   ./setup.sh build IPSW               on the Mac only: the loader, the boot images and darwin.img from YOUR IPSW
 #                                       (RAM_ONLY=1: without darwin.img, if you will only ever run from RAM)
@@ -100,7 +100,7 @@ cmd_check() {
 	say "место на диске: $free ГБ свободно (нужно около 30 на время build, 20 после)"
 	[ "$free" -ge 30 ] || { echo "  МАЛО"; bad=1; }
 	say "прошивка телефона и дерево устройств (./setup.sh firmware)"
-	for f in fw-gpu/a640_gmu.bin fw-audio/adsp.mdt devices/cepheus/prebuilt/device-tree.dtb; do
+	for f in fw-gpu/a640_gmu.bin fw-audio/adsp.mdt fw-modem/image/modem.mdt devices/cepheus/prebuilt/device-tree.dtb; do
 		[ -f "$R/$f" ] && echo "  есть  $f" || echo "  нет   $f"
 	done
 	[ $bad = 0 ] && say "программы на месте" || die "чего-то не хватает (см. выше)"
@@ -125,7 +125,7 @@ cmd_firmware() {
 	for f in boot.img vendor.img NON-HLOS.bin; do [ -f "$img/$f" ] || die "нет $img/$f: это не прошивка MIUI для fastboot"; done
 	case "$rom" in *"$ROM_NAME"*) ;; *) echo "ВНИМАНИЕ: набор проверен на $ROM_NAME; с другой версией MIUI что-то может отличаться" ;; esac
 
-	say "1/3 прошивка GPU (Adreno 640) из vendor.img: /vendor/firmware/a6*"
+	say "1/4 прошивка GPU (Adreno 640) из vendor.img: /vendor/firmware/a6*"
 	rm -rf "$t/v"
 	"$z" e -y -o"$t/v" "$img/vendor.img" firmware/a630_sqe.fw firmware/a640_gmu.bin 'firmware/a640_zap.*' >/dev/null
 	mkdir -p "$R/fw-gpu"
@@ -135,7 +135,7 @@ cmd_firmware() {
 	done
 	ls "$R/fw-gpu" | sed 's/^/   /'
 
-	say "2/3 прошивка аудио-DSP из NON-HLOS.bin: image/adsp.*"
+	say "2/4 прошивка аудио-DSP из NON-HLOS.bin: image/adsp.*"
 	rm -rf "$t/n"
 	# (7-Zip says "Unexpected end of archive" about this FAT image and returns 2, having taken every file out: what counts
 	# is the files below, each checked)
@@ -145,7 +145,21 @@ cmd_firmware() {
 	cp "$t/n"/adsp.* "$t/n"/adsp*.jsn "$R/fw-audio/"
 	echo "   $(ls "$R/fw-audio" | wc -l | tr -d ' ') файлов"
 
-	say "3/3 дерево устройств для загрузчика телефона: те же, что приложены к ядру в boot.img"
+	# Wi-Fi: the WCN3998's firmware runs inside the modem (its WLAN PD), so the modem is started too -- and kept off the
+	# mobile network (the kernel never lets it register; what it writes to its EFS stays in memory). The kernel loads
+	# modem.mdt/bNN; the modem itself reads the rest over TFTP: wlanmdsp.mbn, the board data bdwlan.*, the service
+	# registry's *.jsn and modem_pr/ (hakios-xnu-kernel/userland/build.sh, MODEM=1)
+	say "3/4 прошивка модема и Wi-Fi из NON-HLOS.bin: image/modem.*, wlanmdsp.mbn, bdwlan.*, *.jsn, modem_pr/"
+	rm -rf "$t/m"
+	"$z" x -y -o"$t/m" "$img/NON-HLOS.bin" 'image/modem.*' image/wlanmdsp.mbn 'image/bdwlan.*' 'image/*.jsn' 'image/modem_pr' \
+		>/dev/null 2>&1 || true
+	for f in modem.mdt modem.b00 wlanmdsp.mbn bdwlan.bin modemr.jsn; do [ -s "$t/m/image/$f" ] || die "в NON-HLOS.bin нет image/$f"; done
+	[ -d "$t/m/image/modem_pr" ] || die "в NON-HLOS.bin нет image/modem_pr/"
+	rm -rf "$R/fw-modem"; mkdir -p "$R/fw-modem"
+	mv "$t/m/image" "$R/fw-modem/image"
+	echo "   $(du -sh "$R/fw-modem/image" | cut -f1), $(find "$R/fw-modem/image" -type f | wc -l | tr -d ' ') файлов"
+
+	say "4/4 дерево устройств для загрузчика телефона: те же, что приложены к ядру в boot.img"
 	python3 - "$img/boot.img" "$R/devices/cepheus/prebuilt/device-tree.dtb" <<'EOF'
 import struct, sys
 d = open(sys.argv[1], 'rb').read()
@@ -196,8 +210,14 @@ cmd_build() {
 	say "5/6 образы загрузки: из RAM (system.apfs, около 2,5 ГБ) и для флеша (flashboot.apfs)"
 	local common="PREBUILT=1 REST=1 GL=1 ADSP=1 METAL_PLUGIN=ca"
 	(cd "$R/userland" && env $common EXTRA_SHARE="$share" ./build.sh && cp root.apfs root.ram.apfs)
-	(cd "$R/userland" && env $common EXTRA_SHARE="$share" CRYPTEXES=flash FLASHBOOT=1 ./build.sh)
+	# the modem's and Wi-Fi's firmware (./setup.sh firmware, step 3/4) goes only into the flash image: the radio of the
+	# WCN3998 is driven by the modem's processor, which HakiOS starts for it and keeps offline (no SIM, no calls)
+	local modem=
+	if [ -f "$R/fw-modem/image/modem.mdt" ]; then modem=MODEM=1; else
+		echo "   нет fw-modem/ (./setup.sh firmware MIUI_ROM ещё раз): с флеша будет без Wi-Fi"; fi
+	(cd "$R/userland" && env $common $modem EXTRA_SHARE="$share" CRYPTEXES=flash FLASHBOOT=1 ./build.sh)
 	echo $metal > "$W/metal"
+	[ -n "$modem" ] && echo 1 > "$W/wifi" || echo 0 > "$W/wifi"
 	ls -la "$R/userland/root.ram.apfs" "$R/userland/system.apfs" "$R/userland/root.apfs" "$R/userland/flashboot.apfs"
 	if [ -n "${RAM_ONLY:-}" ]; then
 		say "готово (RAM_ONLY=1: без darwin.img). Запуск: ./run.sh gl ram"

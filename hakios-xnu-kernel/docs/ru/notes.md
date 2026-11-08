@@ -2362,7 +2362,7 @@ fastboot boot ──► UEFI (Mu-Silicium, sm7325) ──► xnuloader (EFI-пр
 | `sysimage/` | добыча файлов Darwin из IPSW и выбор того, что идёт в образ |
 | `qemu/` | запуск в QEMU, касания, снимки экрана, разбор стеков |
 | `uefi/`, `mkxnuimg.py` | порт UEFI на sm7325 и упаковка загрузочного образа для `fastboot boot` |
-| `tools/` | `recording.py` (запись экрана → mp4), `sound.py` (запись звука → wav), `update-prebuilt.sh`, `new-workspace.sh` (вторая рабочая копия со своим ядром и QEMU), `mk-mesa.sh` (Mesa для `GL=1`), `mk-ath11k.sh` (драйвер Wi-Fi для ядра), `mk-jb.sh` (бутстрап Procursus и Sileo, см. «Sileo и пакеты»), `apfs/` (APFS на компьютере: чтение — «Чтение APFS», запись — «Запись в APFS», сборка образов `mkapfs.py` и их проверка `check-image.sh` — «Только APFS, как на iPhone»), `darwin-write.py` (запись в раздел `darwin` и только в него — «Криптексы на флеше»), `qmi-test/` и `wpa-test/` (проверки на компьютере) |
+| `tools/` | `recording.py` (запись экрана → mp4), `sound.py` (запись звука → wav), `update-prebuilt.sh`, `new-workspace.sh` (вторая рабочая копия со своим ядром и QEMU), `mk-mesa.sh` (Mesa для `GL=1`), `mk-ath11k.sh` (драйвер Wi-Fi для ядра), `mk-ath10k.sh` (драйвер Wi-Fi Mi 9, ath10k, на тех же заголовках), `mk-jb.sh` (бутстрап Procursus и Sileo, см. «Sileo и пакеты»), `apfs/` (APFS на компьютере: чтение — «Чтение APFS», запись — «Запись в APFS», сборка образов `mkapfs.py` и их проверка `check-image.sh` — «Только APFS, как на iPhone»), `darwin-write.py` (запись в раздел `darwin` и только в него — «Криптексы на флеше»), `qmi-test/` и `wpa-test/` (проверки на компьютере) |
 | `wifi/lx/` | прослойка, на которой драйвер Wi-Fi из Linux собирается для нашего ядра (см. «Драйвер Wi-Fi») |
 | `jb/` | префикс менеджера пакетов: бутстрап Procursus с Sileo (`tools/mk-jb.sh`), в git не попадает |
 | `prebuilt/` | собранные ядро, загрузчик, наши программы и куски UEFI |
@@ -3252,6 +3252,9 @@ Darwin, которого она ждёт, — это уже другое: соз
   остальное в `wifi/lx/` написано нами. Ядро, собранное после `tools/mk-ath11k.sh`, содержит код ath11k и
   встроенные функции из заголовков LinuxKPI: кто распространяет такое ядро в собранном виде, прикладывает их
   уведомления об авторских правах (они в заголовках файлов ath11k и в `COPYRIGHT` из архива FreeBSD);
+- ath10k (Qualcomm Atheros; лицензия ISC) и общие файлы `ath/` (регуляторные домены, ISC) в репозитории тоже нет:
+  `tools/mk-ath10k.sh` берёт их из того же архива Linux 7.0.14, проверяет лицензию каждого файла и собирает на
+  том же дереве FreeBSD; `wifi/lx/ath10k/` написано нами. О распространении собранного — то же, что для ath11k;
 - `xnu-deps/build/lzbitmap/libzbitmap.*` — libzbitmap (Corellium, GPL-2.0+ OR MIT);
   `xnu-deps/hostinc/mach-o/{loader,nlist,fat}.h` — заголовки из XNU (APSL 2.0).
 - `devices/sm7325/uefi/files/Binaries/redwood` и `devices/sm7325/prebuilt/SILICIUM_UEFI.fd` содержат драйверы UEFI из прошивки Xiaomi

@@ -34,12 +34,14 @@ basic 和 gl 模式可以加上 `ram`，这样一切都从内存运行：`./run.
 
 | 可用（gl 和 metal 模式） | 不可用 |
 |---|---|
-| 锁屏、主屏幕、应用、设置、Spotlight | Wi-Fi、蓝牙、蜂窝网络 |
+| 锁屏、主屏幕、应用、设置、Spotlight | 蓝牙、蜂窝网络（SIM 卡、通话、移动数据） |
 | 触摸屏、手势、电源键和音量键 | 相机、麦克风、听筒 |
 | 左侧的 AI 键作为“响铃/静音”开关 | 登录 Apple ID 和 iCloud（这款手机没有 Secure Enclave） |
 | GPU：滚动时约 60 帧/秒（gl） | 在 HakiOS 引导程序中手机**不充电** |
 | 底部扬声器发声、振动 | |
 | 状态栏中的电池电量（只读） | |
+| 屏幕亮度：控制中心和设置中的滑块 | 自动亮度（环境光传感器） |
+| **Wi-Fi**（仅从闪存启动）：在“设置 → Wi-Fi”中选择网络，Safari 和应用可以上网 | Wi-Fi：WPA3 网络、无密码的开放网络、个人热点 |
 
 ### 从内存和从闪存：各自哪些可用
 
@@ -54,6 +56,7 @@ basic 和 gl 模式可以加上 `ram`，这样一切都从内存运行：`./run.
 | 扬声器发声 | ✅ | ❌ 系统内存不足，会不断把音频服务换出 |
 | 振动 | ✅ | ❌ 原因相同：iOS 通过音频服务发送振动 |
 | 状态栏中的电池电量 | ✅ | ✅ |
+| Wi-Fi | ✅（用 `nowifi` 关闭：`./run.sh gl nowifi`） | ❌ 调制解调器和 Wi-Fi 固件不在 RAM 镜像中 |
 | CPU 频率、温度传感器 | ✅ | ✅ |
 | 设置、照片、应用数据是否保留 | ✅（`/private/var` 位于闪存上） | ❌ 退出后全部丢失 |
 | 是否需要改动手机闪存 | 是，一次（`./setup.sh install`） | 否 |
@@ -69,7 +72,7 @@ basic 模式（仅显示画面）从内存和从闪存运行效果相同。
 - **小米 9（cepheus）**，**已解锁 bootloader**（Mi Unlock）。本套件在国际版 MIUI 12.5
   **V12.5.1.0.RFAMIXM**（Android 11）、64 GB 型号上测试过。使用其他固件的引导程序（ABL）时可能无法工作。
 - 相同版本的 **MIUI 线刷包（fastboot ROM）**：`cepheus_global_images_V12.5.1.0.RFAMIXM_…_global.tgz`
-  （来自小米官网或镜像站）。套件从中提取 GPU 和音频 DSP 固件以及手机的设备树。它不会被安装到手机上。
+  （来自小米官网或镜像站）。套件从中提取 GPU、音频 DSP、调制解调器和 Wi-Fi 固件以及手机的设备树。它不会被安装到手机上。
 - **iPhone X 的 iOS 16.5 IPSW**：`iPhone10,3,iPhone10,6_16.5_20F66_Restore.ipsw`，6,165,698,198 字节。
   需要你自己下载：套件中不含任何 Apple 文件。引导程序和 iOS 镜像会在你的 Mac 上由它构建。
 - **cepheus 的 TWRP**（`.img`，例如来自 twrp.me）。仅在从闪存运行时需要：用于备份和分区。
@@ -107,7 +110,10 @@ cd hakios-mi9
 ./setup.sh firmware ~/Downloads/cepheus_global_images_V12.5.1.0.RFAMIXM_20210611.0000.00_11.0_global.tgz
 ```
 也可以指定已经解压的固件文件夹。套件从 `vendor.img` 中提取 GPU 固件（`fw-gpu/`），从 `NON-HLOS.bin` 中提取
-音频 DSP 固件（`fw-audio/`），从 `boot.img` 中提取设备树（`devices/cepheus/prebuilt/device-tree.dtb`）。
+音频 DSP 固件（`fw-audio/`），从 `boot.img` 中提取设备树（`devices/cepheus/prebuilt/device-tree.dtb`）。还从 `NON-HLOS.bin`
+中提取调制解调器和 Wi-Fi 固件（`fw-modem/`，87 MB）：Wi-Fi 射频（WCN3998）由调制解调器的处理器控制，因此 HakiOS 会启动
+调制解调器，但**不会让它连接蜂窝网络**：没有 SIM 卡、通话和移动数据，也不会写入调制解调器的分区（`modem`、EFS、`persist`）。
+如果你以前做过这一步，请再做一次，然后重新做第 2 步，否则不会有 Wi-Fi。
 
 ### 2. 在 Mac 上构建（不需要手机）
 ```bash
@@ -182,9 +188,14 @@ RAM_ONLY=1 ./setup.sh build ~/Downloads/iPhone10,3,iPhone10,6_16.5_20F66_Restore
 
 屏幕上先出现引导程序的绿色文字，1–2 分钟后出现锁屏：向上滑动或等待几秒。iOS 的运行没有时间限制。
 
+**Wi-Fi**（gl 和 metal，从闪存启动）：在“设置 → Wi-Fi”中选择网络并输入密码，和 iPhone 上一样。支持 WPA2 网络；在 2.4 GHz
+（iPhone 的个人热点）上测试过：下行约 65 Mbit/s，上行约 3 Mbit/s。5 GHz 和普通路由器尚未测试。暂不支持 WPA3 和无密码的网络。
+手机有自己固定的 MAC 地址（由芯片序列号计算得出）。网络断开后，网络恢复时手机会自动重新连接。不使用 Wi-Fi：`./run.sh gl nowifi`。
+
 - **退出到 HakiOS 引导程序：** 用 **5 根手指按住屏幕 1.5 秒**（gl、metal），或在另一个终端窗口中执行
   `./hakios-xnu-kernel/xl stop`（在 basic 中只能这样）。
-- **不重启、从引导程序回到 iOS：** `./run.sh gl again`（把 gl 换成之前使用的模式，`ram` 也与之前保持一致）。
+- **不重启、从引导程序回到 iOS：** `./run.sh gl again`（把 gl 换成之前使用的模式，`ram` 也与之前保持一致）。`again` 之后没有 Wi-Fi：
+  调制解调器不会第二次启动。需要 Wi-Fi 时请重启手机：按住电源键 15 秒，然后按音量减 + 电源键（fastboot），再执行 `./run.sh gl`。
 - **让 iOS 在指定时间后自动退出：** `XL_SECS=3600 ./run.sh gl`（一小时）。
 - **回到 Android：** 长按 **电源键**，或执行 `fastboot reboot`。在 `install new` 之后，Android 首次启动时会
   重新进行初始设置。在 `install userdata` 之后，执行 `./setup.sh uninstall` 之前 Android 无法启动。

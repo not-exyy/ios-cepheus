@@ -1,10 +1,12 @@
-Built 2026-11-06 for the Xiaomi Mi 9 (cepheus) from the cepheus branch (f15c70c): the kernel with every Mi 9 driver,
+Built 2026-11-06 for the Xiaomi Mi 9 (cepheus) from the cepheus branch (f15c70c); again on 2026-11-08 (fee2e7a: the
+modem and Wi-Fi, the screen's brightness for iOS's slider; the Metal plug-in for CoreAnimation from 56df534 with hakios-metal
+7ee39cc): the kernel with every Mi 9 driver,
 our user-space programs, Mesa's libOSMesa (MIT) for GL and the Metal plug-in for CoreAnimation. The loader is built by the kit from your own IPSW.
 
-839cdcdc7fcb62bf98bc44c0413ac10123f9065084e19849b232507fefc4c121  prebuilt/hakios-kernel
+bfbdc3a9e6f6080370752ed645bb798cb64aa5ab2d75f84cb01980cea21d464f  prebuilt/hakios-kernel
 6a3c19abc1db01a367bf78863fea288f621683edf31059731a78a77040ffe034  prebuilt/loader.efi
 eb6ea519a8212eed24cb049c27d5ed4747017534d83bc872e1799d56e8d2cdf7  prebuilt/userland/HakiosAudio
-a85e2aef67e57eee535acb596bac17f0b1aa1a9513bcf7e41aa25900aad5cac8  prebuilt/userland/HakiosMetal
+e65df7990ba9880aafcc3ec604a5a17ff3f5e30af049c24961d00c7b93ef3c01  prebuilt/userland/HakiosMetal
 de15ce913c7323702a1b47edc275b211441b9f90c051967a5c1c160848f8c763  prebuilt/userland/apfs_mmap_test
 6a307e347fb434532a82e675913a6c839048977563137b27604c82b2fbfac424  prebuilt/userland/battery_test
 2bdf54fb54c2fb3b8fb8daa0fbe7ed092643d27f4376ceffabcb3d8372419bc8  prebuilt/userland/camera_avtest

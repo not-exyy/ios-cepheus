@@ -553,6 +553,9 @@ static void hm_fps_drew(double seconds, unsigned cpu);   /* metal_fps: our time 
 static void hm_fps_core(double seconds);   /* metal_fps: the core's time in a draw call */
 static BOOL hm_fps_on(void);                          /* metal_fps: command buffers timed pass by pass */
 static BOOL hm_gmem_on(void);                         /* metal_gmem=1: tiled rendering where a pass allows it */
+static BOOL hm_cover_on(void);                        /* hidden draws left out (default; metal_cover=0: off) */
+static int hm_cover_mode(void);                       /* 1 (metal_cover=hide, the default), metal_cover=load: 2, metal_cover=all: 3 */
+static BOOL hm_fps_list(void);                        /* metal_fps=list: a heavy GMEM pass's draws listed */
 - (void)hakiosShadowYCbCr:(IOSurfaceRef)surface format:(MTLPixelFormat)format;
 - (void)hakiosRefreshShadow;
 - (void)hakiosSetDeallocator:(void (^)(void *, NSUInteger))deallocator bytes:(void *)bytes length:(NSUInteger)length;
@@ -4819,6 +4822,14 @@ HM_REFUSES_OUT_LOUD
 		hakios_metal_cb_set_gmem_off(_cb, hm_gmem_off());
 		hakios_metal_cb_set_gmem_tuned(_cb, (hm_gmem_off() & 8) == 0);   /* metal_gmem_off's 8: GMEM wherever a pass can have it */
 		hakios_metal_cb_set_profile_draws(_cb, hm_fps_draws());
+		hakios_metal_cb_set_list_draws(_cb, hm_fps_list());   /* metal_fps=list: a heavy GMEM pass's draws, nothing timed alone */
+		/* draws a later opaque rectangle hides left out: CoreAnimation's fixed_vert_lph_spc's position is its mvp_matrix,
+		 * [[buffer(2)]], times attribute 0 -- a layer scaled in an app's zoom or Home is smaller than its vertices
+		 * (hakios_metal_cb_set_cover_vertex_function; boot-arg metal_cover=0: off) */
+		hakios_metal_cb_set_cover_vertex_function(_cb, hm_cover_on() ? "fixed_vert_lph_spc" : NULL, 2);
+		/* (the draws alone by default, every load kept -- leaving attachment 0's load out under a cover showed old tiles in
+		 * bands during an app's zoom; metal_cover=all: both, metal_cover=load: the loads alone, for finding out why) */
+		hakios_metal_cb_set_cover_modes(_cb, hm_cover_mode() != 2, hm_cover_mode() >= 2);
 	}
 	_owesSlot = YES;
 	return self;
@@ -5314,6 +5325,7 @@ static struct {
 	uint64_t lastTpidr;
 	double sampledBytes[6];   /* metal_fps=timeline: the bound fragment textures' sizes, by hakiosStorageKind */
 	struct { unsigned w, h, origin; double bytes; } bySize[16];
+	unsigned hiddenDraws, savedLoads, staleCovers;   /* draws a later one hid and left out, GMEM passes not loading attachment 0 so (last: zero from the initializer) */
 } hm_fps = { PTHREAD_MUTEX_INITIALIZER, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {{0, 0, 0, 0, 0, 0}}, 0, "", {{"", 0, 0}}, NO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, {0}, 0, {0}, {{0, 0, 0, 0}} };
 
 /* boot-arg metal_gmem=1: tiled rendering (render::Options::gmem) for a pass that can have it, GMEM or sysmem chosen by
@@ -5331,6 +5343,58 @@ hm_gmem_on(void)
 		size_t size = sizeof(args) - 1;
 
 		on = sysctlbyname("kern.bootargs", args, &size, NULL, 0) == 0 && strstr(args, "metal_gmem=1") != NULL;
+	}
+	return on != 0;
+}
+
+/* draws a later opaque rectangle hides left out (the zoom pass ~9.8 -> ~6.2 ms), by default; boot-arg metal_cover=0: off,
+ * =load/=all attachment 0's load too. (The bands of old pictures seen in an app's zoom with it and without it were the
+ * display's: CoreAnimation drew into a surface still on its way to the panel -- MiniIOMobileFramebuffer's fb_reuse; with
+ * that, logs/193257-run.log: smoother and no bands.) */
+static BOOL
+hm_cover_on(void)
+{
+	static int on = -1;
+
+	if (on < 0) {
+		char args[1024] = {0};
+		size_t size = sizeof(args) - 1;
+
+		on = sysctlbyname("kern.bootargs", args, &size, NULL, 0) != 0 || strstr(args, "metal_cover=0") == NULL;
+	}
+	return on != 0;
+}
+
+/* boot-arg metal_cover=hide (1, the default): covered draws left out, attachment 0 loaded as ever; metal_cover=load
+ * (2): its load left out under a cover, every draw drawn; metal_cover=all (3): both */
+static int
+hm_cover_mode(void)
+{
+	static int mode = -1;
+
+	if (mode < 0) {
+		char args[1024] = {0};
+		size_t size = sizeof(args) - 1;
+
+		mode = 1;
+		if (sysctlbyname("kern.bootargs", args, &size, NULL, 0) == 0) {
+			mode = strstr(args, "metal_cover=load") != NULL ? 2 : strstr(args, "metal_cover=all") != NULL ? 3 : 1;
+		}
+	}
+	return mode;
+}
+
+/* metal_fps=list: the draws of a heavy GMEM pass listed (program, blending, attachments, corners), nothing timed alone */
+static BOOL
+hm_fps_list(void)
+{
+	static int on = -1;
+
+	if (on < 0) {
+		char args[1024] = {0};
+		size_t size = sizeof(args) - 1;
+
+		on = sysctlbyname("kern.bootargs", args, &size, NULL, 0) == 0 && strstr(args, "metal_fps=list") != NULL;
 	}
 	return on != 0;
 }
@@ -5410,6 +5474,102 @@ hm_fps_on(void)
 	return on != 0;
 }
 
+/* metal_fps=list: what the screen redraws in the 30-a-second tail after an app opens (logs/130704: ~3 s of it until
+ * the next touch, which GL does not have) -- for the command buffers from 0.8 to 3 s after the first app zoom (a
+ * 1127x2438 pass), two short lines each: its passes (size, g in tiles, draws) and its programs with the first texture
+ * each samples, counted. Short, because the log loses long runs of lines. */
+static void
+hm_tail_note(hakios_metal_cb *cb, double now)
+{
+	static double zoomAt;
+	static unsigned printed;
+	unsigned kind, w, h, draws;
+	double us;
+	const int n = hakios_metal_cb_pass_time(cb, 0, NULL, NULL, NULL, NULL, NULL);
+
+	static unsigned zooms;
+	static char lastDraws[900];
+
+	/* (every app zoom starts a window, one more than 3 s after the last one began: the boot's own, then each open) */
+	for (int i = 0; i < n; i++) {
+		hakios_metal_cb_pass_time(cb, (unsigned)i, &kind, &w, &h, &draws, &us);
+		if (w == 1127 && h == 2438 && now - zoomAt > 3.0) {
+			zoomAt = now;
+			zooms++;
+			lastDraws[0] = 0;
+		}
+	}
+	if (zoomAt == 0 || now - zoomAt < 0.8 || now - zoomAt > 3.0 || printed >= 400 || n <= 0) {
+		return;
+	}
+	printed++;
+	char line[900];
+	size_t at = (size_t)snprintf(line, sizeof(line), "tail %u +%.2f:", zooms, now - zoomAt);
+	double total = 0;
+
+	for (int i = 0; i < n && at < sizeof(line) - 40; i++) {
+		hakios_metal_cb_pass_time(cb, (unsigned)i, &kind, &w, &h, &draws, &us);
+		total += us;
+		at += (size_t)snprintf(line + at, sizeof(line) - at, " %ux%u%s:%u", w, h, hakios_metal_cb_pass_tiles(cb, (unsigned)i) > 0 ? "g" : "", draws);
+	}
+	snprintf(line + at, sizeof(line) - at, "; %.1f ms", total / 1e3);
+	hm_print("%s\n", line);
+	/* the programs, each with the first texture it samples, counted */
+	char names[24][64];
+	unsigned counts[24] = {0}, kinds = 0;
+
+	for (unsigned i = 0;; i++) {
+		const char *name = NULL;
+		double dus = 0;
+
+		if (hakios_metal_cb_draw_time(cb, i, &name, &dus) <= (int)i || name == NULL) {
+			break;
+		}
+		char token[64];
+		size_t k = 0;
+		const char *p = name;
+
+		/* the program, its common prefixes off */
+		if (strncmp(p, "fixed_vert_lph_", 15) == 0) p += 15;
+		while (*p != 0 && *p != ' ' && k < 30) {
+			token[k++] = *p++;
+		}
+		token[k] = 0;
+		{
+			char *frag = strstr(token, "+fixed_frag_lph_");
+			if (frag != NULL) memmove(frag + 1, frag + 16, strlen(frag + 16) + 1);
+			k = strlen(token);
+		}
+		/* the first " N:WxH/" of its textures */
+		for (const char *q = strchr(name, ' '); q != NULL; q = strchr(q + 1, ' ')) {
+			unsigned slot, tw, th;
+			char slash;
+
+			if (sscanf(q + 1, "%u:%ux%u%c", &slot, &tw, &th, &slash) == 4 && slash == '/') {
+				snprintf(token + k, sizeof(token) - k, "@%ux%u", tw, th);
+				break;
+			}
+		}
+		unsigned j;
+		for (j = 0; j < kinds && strcmp(names[j], token) != 0; j++) {
+		}
+		if (j == kinds && kinds < 24) {
+			strlcpy(names[kinds++], token, sizeof(names[0]));
+		}
+		if (j < 24) counts[j]++;
+	}
+	at = 0;
+	line[0] = 0;
+	for (unsigned j = 0; j < kinds && at < sizeof(line) - 70; j++) {
+		at += (size_t)snprintf(line + at, sizeof(line) - at, " %s x%u", names[j], counts[j]);
+	}
+	/* (the draws only when they differ from the last ones printed) */
+	if (strcmp(line, lastDraws) != 0) {
+		strlcpy(lastDraws, line, sizeof(lastDraws));
+		hm_print("tail %u +%.2f: draws%s\n", zooms, now - zoomAt, line);
+	}
+}
+
 /* one buffer done (GPU seconds, commit-to-completion seconds, what it held) or one frame presented (present set) */
 static void
 hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
@@ -5420,6 +5580,9 @@ hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
 		return;
 	}
 	pthread_mutex_lock(&hm_fps.lock);
+	if (!present && cb != NULL && hm_fps_list()) {
+		hm_tail_note(cb, now);
+	}
 	if (hm_fps.since == 0) {
 		hm_fps.since = now;
 	}
@@ -5443,6 +5606,14 @@ hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
 
 				hakios_metal_cb_gmem_counts(cb, &gp, &tl);
 				hm_fps.gmemPasses += gp;
+				{
+					unsigned hd = 0, sl = 0;
+
+					hakios_metal_cb_hidden_counts(cb, &hd, &sl);
+					hm_fps.hiddenDraws += hd;
+					hm_fps.staleCovers += hakios_metal_cb_stale_covers(cb);
+					hm_fps.savedLoads += sl;
+				}
 				hm_fps.tiles += tl;
 				if (hakios_metal_cb_gmem_refusal(cb)[0] != 0) {
 					strlcpy(hm_fps.gmemWhy, hakios_metal_cb_gmem_refusal(cb), sizeof(hm_fps.gmemWhy));
@@ -5452,7 +5623,13 @@ hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
 			/* (and with metal_fps=timeline every pass of a few draws over 8 ms, 15 of them: a few draws that cost so much
 			 * are a shader's doing, not the pass's) */
 			static unsigned fewShown;
-			if (hm_fps_draws() && (!hm_fps.heavyShown || hm_timeline_on())) {
+			static BOOL said;
+			if (!said) {
+				said = YES;
+				hm_print("fps: ... draws listed: %s, timed: %s, hidden ones left out: %s\n", hm_fps_list() ? "yes" : "no", hm_fps_draws() ? "yes" : "no",
+					 hm_cover_on() ? "yes" : "no");
+			}
+			if ((hm_fps_draws() || hm_fps_list()) && (!hm_fps.heavyShown || hm_timeline_on() || hm_fps_list())) {
 				unsigned slow = 0, kind, width, height, draws, slowDraws = 0;
 				double slowUs = 0, us;
 				int n = hakios_metal_cb_pass_time(cb, 0, NULL, NULL, NULL, NULL, NULL);
@@ -5463,9 +5640,35 @@ hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
 				}
 				const BOOL few = hm_timeline_on() && slowUs > 8000 && slowDraws <= 20 && fewShown < 15;
 				fewShown += few ? 1 : 0;
-				if ((slowUs > 20000 && !hm_fps.heavyShown) || few) {
-					hm_fps.heavyShown = YES;
-					hm_print("fps: ... a heavy pass, %.1f ms; its draws:\n", slowUs / 1e3);
+				/* (a binned pass over 8 ms too, its draws listed with no time of their own: twelve of them in a run) */
+				/* (the screen's own passes, 1125x2436, three times; any other -- the zoom's -- eight) */
+				static unsigned binnedShown, screenShown;
+				unsigned sw = 0, sh = 0;
+				hakios_metal_cb_pass_time(cb, slow, NULL, &sw, &sh, NULL, NULL);
+				const BOOL screen = sw == 1125 && sh == 2436;
+				/* (and, metal_fps=list, a command buffer every 300 ms, twenty in a run, every pass's covers and hidden draws: what the screen
+				   redraws while nothing is touched -- in sysmem passes too -- two listings apart telling what moved) */
+				static uint64_t sampledAt;
+				static unsigned sampled;
+				const uint64_t nowNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+				/* (armed by the first app zoom, a 1127x2438 pass: the boot's frames would use the forty up) */
+				static BOOL armed;
+				for (int i = 0; i < n && !armed; i++) {
+					unsigned zw = 0, zh = 0;
+
+					hakios_metal_cb_pass_time(cb, (unsigned)i, NULL, &zw, &zh, NULL, NULL);
+					armed = zw == 1127 && zh == 2438;
+				}
+				const BOOL sample = hm_fps_list() && armed && n > 0 && sampled < 20 && nowNs - sampledAt >= 300000000ull;
+				sampled += sample ? 1 : 0;
+				sampledAt = sample ? nowNs : sampledAt;
+				const BOOL binned = (slowUs > 8000 && hakios_metal_cb_pass_tiles(cb, slow) > 0 && (screen ? screenShown < 3 : binnedShown < 8)) || sample;
+				binnedShown += binned && !screen ? 1 : 0;
+				screenShown += binned && screen && !sample ? 1 : 0;
+				if ((slowUs > 20000 && !hm_fps.heavyShown) || few || binned) {
+					hm_fps.heavyShown = hm_fps.heavyShown || !binned;
+					hm_print("fps: ... a heavy pass, %.1f ms%s%s at %llu ms; its draws:\n", slowUs / 1e3, binned ? " in GMEM" : "", sample ? " (sampled)" : "",
+						 (unsigned long long)(nowNs / 1000000ull));
 					for (unsigned i = 0;; i++) {
 						const char *name = NULL;
 						unsigned pass, area[4];
@@ -5474,8 +5677,19 @@ hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
 						if (hakios_metal_cb_draw_place(cb, i, &pass, area) <= (int)i || hakios_metal_cb_draw_time(cb, i, &name, &dus) <= (int)i) {
 							break;
 						}
-						if (pass == slow) {
+						if (sample && strstr(name, "COVER") == NULL && strstr(name, "HIDDEN") == NULL) {
+							continue;   /* (a sample: the covers and what they hid alone, the log's room being small) */
+						}
+						if (sample && pass != slow) {
+							unsigned pw = 0, ph = 0;
+
+							hakios_metal_cb_pass_time(cb, pass, NULL, &pw, &ph, NULL, NULL);
+							hm_print("fps: ...   p%u %ux%u %s over %ux%u at (%u,%u)\n", pass, pw, ph, name, area[2] - area[0] + 1, area[3] - area[1] + 1, area[0],
+								 area[1]);
+						} else if (pass == slow && dus >= 0) {
 							hm_print("fps: ...   %s %.0f us over %ux%u at (%u,%u)\n", name, dus, area[2] - area[0] + 1, area[3] - area[1] + 1, area[0], area[1]);
+						} else if (pass == slow) {
+							hm_print("fps: ...   %s over %ux%u at (%u,%u)\n", name, area[2] - area[0] + 1, area[3] - area[1] + 1, area[0], area[1]);
 						}
 					}
 				}
@@ -5487,6 +5701,9 @@ hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
 
 				if (hakios_metal_cb_draw_time(cb, i, &name, &us) <= (int)i || name == NULL) {
 					break;
+				}
+				if (us < 0) {
+					continue;   /* (a GMEM pass's, listed with no time) */
 				}
 				for (k = 0; k < 48 && hm_fps.programs[k].name[0] != 0 && strcmp(hm_fps.programs[k].name, name) != 0; k++) {
 				}
@@ -5641,6 +5858,11 @@ hm_fps_note(BOOL present, double gpu, double latency, hakios_metal_cb *cb)
 		}
 		memset(hm_fps.programs, 0, sizeof(hm_fps.programs));
 		hm_fps.heavyShown = NO;
+		if (hm_fps.hiddenDraws + hm_fps.savedLoads != 0) {
+			hm_print("fps: ... hidden by a later draw: %u draws left out, %u loads of the old picture saved; %u draws looked at changed before the commit\n",
+				 hm_fps.hiddenDraws, hm_fps.savedLoads, hm_fps.staleCovers);
+			hm_fps.hiddenDraws = hm_fps.savedLoads = hm_fps.staleCovers = 0;
+		}
 		if (hm_fps.gmemWhy[0] != 0) {
 			hm_print("fps: ... a pass left in sysmem: %s\n", hm_fps.gmemWhy);
 			hm_fps.gmemWhy[0] = 0;

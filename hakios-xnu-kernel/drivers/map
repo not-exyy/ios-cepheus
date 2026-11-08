@@ -25,6 +25,8 @@ storage  bsd/dev/hakios.virtio_blk.c
 
 gpu      bsd/dev/hakios.adreno.c
 gpu      iokit/Kernel/hakios.gpu.cpp
+gpu      bsd/dev/hakios.backlight.c
+gpu      iokit/Kernel/hakios.backlight.cpp
 
 camera   bsd/dev/hakios.camera.c
 camera   bsd/dev/hakios.torch.c
@@ -53,6 +55,7 @@ wifi     bsd/dev/hakios.lx.c
 wifi     bsd/dev/hakios.sta.c
 wifi     bsd/dev/hakios.apple80211.c
 wifi     iokit/Kernel/hakios.wlan.cpp
+wifi     bsd/dev/hakios.wcn3990.c
 
 modem    bsd/dev/hakios.mpss.c
 modem    bsd/dev/hakios.cell.c

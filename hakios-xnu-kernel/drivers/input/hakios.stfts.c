@@ -525,8 +525,17 @@ static struct {
 	uint32_t x, y;
 } contact[16];
 static struct {
-	uint32_t events, touches, readies, errors, statuses, others, failed, last_x, last_y;
+	uint32_t events, touches, readies, errors, statuses, others, failed, last_x, last_y, recoveries, recals;
 } seen;
+
+/*
+ * The chip gone wrong (2026-11-05/08, logs/104324, 222349, 115822): a few touches -- some of them fingers "down" at the
+ * panel's very side edges, x 1079 at three heights at once, or 0 and 1079 together -- then not one event more, the bus
+ * and the chip answering. What makes it suspect, and when it last said anything about fingers;
+ * the thread starts it again once nothing is down (see stfts_thread).
+ */
+static bool suspect, starting;
+static uint64_t last_touch_event;
 
 static bool
 fifo_read(uint8_t *events, uint32_t count)
@@ -550,6 +559,25 @@ scan_active(void)
 	uint8_t command[3] = { CMD_SCAN_MODE, SCAN_MODE_ACTIVE, 0x01 };    /* 0x01: mutual sensing, as Xiaomi's driver has it */
 
 	return i2c_write(command, sizeof(command));
+}
+
+/*
+ * Sensing started as Xiaomi's fts_521 does it (fts_mode_handler, then fts_init_sensing): the charger mode first
+ * (setFeatures(FEAT_SEL_CHARGER, 1): A2 02 01 -- the phone is on USB while it runs), then sensing off (A0 00 00) and on
+ * again (A0 00 01), which calibrates with the charger's scan frequencies in place. Before, sensing was on first and
+ * the charger mode came after it, over a calibration made without it.
+ */
+static bool
+start_sensing(void)
+{
+	uint8_t charger[3] = { 0xa2, 0x02, 0x01 }, off[3] = { CMD_SCAN_MODE, SCAN_MODE_ACTIVE, 0x00 };
+	bool ok;
+
+	ok = i2c_write(charger, sizeof(charger));
+	sleep_ms(1);
+	ok = i2c_write(off, sizeof(off)) && ok;
+	sleep_ms(10);
+	return scan_active() && ok;
 }
 
 static void
@@ -594,6 +622,18 @@ handle_event(const uint8_t *e)
 		if (flip & 2) {
 			y = 65535 - y;
 		}
+		last_touch_event = mach_absolute_time();
+		if (!contact[id].down && (x == 65535 || x == 0) && !starting) {
+			unsigned at_edge = 1;
+
+			for (uint32_t other = 0; other < MAX_TOUCHES; other++) {
+				at_edge += other != id && contact[other].down && (contact[other].x == 65535 || contact[other].x == 0);
+			}
+			if (at_edge >= 2 && !suspect) {
+				suspect = true;
+				printf("stfts: %u fingers down at the side edges at once: the chip is suspect\n", at_edge);
+			}
+		}
 		if (!contact[id].down) {
 			hakios_touch_post(HAKIOS_TOUCH_DOWN, id, x, y);
 		} else if (contact[id].x != x || contact[id].y != y) {
@@ -604,6 +644,7 @@ handle_event(const uint8_t *e)
 		contact[id].y = y;
 		break;
 	case EVT_LEAVE:
+		last_touch_event = mach_absolute_time();
 		if (id < MAX_TOUCHES && contact[id].down) {
 			contact[id].down = false;
 			hakios_touch_post(HAKIOS_TOUCH_UP, id, contact[id].x, contact[id].y);
@@ -614,7 +655,7 @@ handle_event(const uint8_t *e)
 		seen.readies++;
 		printf("stfts: the chip has reset itself; scanning again\n");
 		release_all();
-		scan_active();
+		start_sensing();
 		break;
 	case EVT_ERROR:
 		seen.errors++;
@@ -626,6 +667,8 @@ handle_event(const uint8_t *e)
 		break;
 	case EVT_STATUS:
 		seen.statuses++;
+		/* (a force calibration the chip decides on itself, 43 05 30, follows almost every touch on a good day too:
+		 * logs/121130 -- no sign of anything) */
 		{
 			static unsigned statuses_shown;
 
@@ -808,19 +851,68 @@ bring_up(void)
 	}
 	printf("stfts: chip id %02x %02x, firmware %02x%02x%s\n", id[0], id[1], id[5], id[4],
 	    id[0] == 0x36 && id[1] == 0x39 ? " (FTM5)" : " (NOT the FTM5 that was expected)");
-	if (!scan_active()) {
-		printf("stfts: the chip did not take the scan mode command\n");
+	if (!start_sensing()) {
+		printf("stfts: the chip did not take the charger mode and sensing commands\n");
 		return false;
-	}
-	{
-		/* the charger mode (Xiaomi's setFeatures(FEAT_SEL_CHARGER, 1): A2 02 01): the phone is on USB while it runs */
-		uint8_t charger[3] = { 0xa2, 0x02, 0x01 };
-
-		printf("stfts: charger mode %s\n", i2c_write(charger, sizeof(charger)) ? "on" : "NOT TAKEN");
 	}
 	sleep_ms(10);
 	chip_poll();                    /* whatever the commands left in the FIFO */
 	return true;
+}
+
+/*
+ * Ten times a second: a finger down that has said nothing for 10 s is let go (and the chip is suspect); a suspect chip is
+ * started again from its supplies once nothing is down and it has been quiet for 1.5 s; and a chip quiet for 30 s with
+ * nothing down is calibrated again (sensing off and on: 20 ms), which mends one that went deaf with no sign of it
+ * (logs/222349). touch_recover=0: none of it.
+ */
+static void
+recover(void)
+{
+	static int on = -1;
+	static uint64_t last_recal;
+	uint64_t now = mach_absolute_time(), quiet = (now - last_touch_event) / ticks_per_us / 1000;   /* ms */
+	bool any = false;
+
+	if (on < 0) {
+		uint32_t value = 1;
+
+		PE_parse_boot_argn("touch_recover", &value, sizeof(value));
+		on = value != 0;
+	}
+	if (!on) {
+		return;
+	}
+	for (uint32_t id = 0; id < MAX_TOUCHES; id++) {
+		any |= contact[id].down;
+	}
+	if (any && quiet >= 10000) {
+		printf("stfts: fingers down and not a word about them for %llu ms: let go, the chip is suspect\n", (unsigned long long)quiet);
+		release_all();
+		suspect = true;
+		any = false;
+	}
+	if (any) {
+		return;
+	}
+	if (suspect && quiet >= 1500) {
+		seen.recoveries++;
+		printf("stfts: the chip suspect, nothing down, quiet for %llu ms: starting it again from its supplies (%u)\n", (unsigned long long)quiet,
+		    seen.recoveries);
+		starting = true;
+		if (!bring_up()) {
+			printf("stfts: starting it again failed\n");
+		}
+		starting = false;
+		suspect = false;
+		last_touch_event = last_recal = mach_absolute_time();
+		return;
+	}
+	if (quiet >= 30000 && (now - last_recal) / ticks_per_us / 1000 >= 30000) {
+		seen.recals++;
+		start_sensing();
+		last_recal = mach_absolute_time();
+	}
 }
 
 static void
@@ -838,11 +930,14 @@ stfts_thread(__unused void *parameter, __unused wait_result_t result)
 
 	tlmm_north = ml_io_map(TLMM_NORTH_PHYS, TLMM_TILE_SIZE);
 	tlmm_south = ml_io_map(TLMM_SOUTH_PHYS, TLMM_TILE_SIZE);
+	starting = true;
 	if (!bring_up()) {
 		printf("stfts: no touch screen\n");
 		thread_terminate(current_thread());
 		return;
 	}
+	starting = false;
+	last_touch_event = mach_absolute_time();
 	printf("stfts: touch screen ready; the interrupt line is looked at every %u us\n", poll_us);
 	for (unsigned tick = 1;; tick++) {
 		/* the line stays low while events wait; a few reads in a row drain a full FIFO */
@@ -856,9 +951,12 @@ stfts_thread(__unused void *parameter, __unused wait_result_t result)
 		}
 		if (tick % (60 * (1000000 / poll_us)) == 0) {
 			printf("stfts: so far %u events, %u finger positions, the last at %u, %u; %u resets of the chip, %u errors, "
-			    "%u status events, %u others, %u reads that failed; interrupt line %s\n", seen.events, seen.touches,
-			    seen.last_x, seen.last_y, seen.readies, seen.errors, seen.statuses, seen.others, seen.failed,
-			    gpio_get(PIN_INT) ? "high" : "low");
+			    "%u status events, %u others, %u reads that failed; %u times started again, %u calibrations; "
+			    "interrupt line %s\n", seen.events, seen.touches, seen.last_x, seen.last_y, seen.readies, seen.errors,
+			    seen.statuses, seen.others, seen.failed, seen.recoveries, seen.recals, gpio_get(PIN_INT) ? "high" : "low");
+		}
+		if (tick % (100000 / poll_us) == 0) {
+			recover();      /* ten times a second */
 		}
 		sleep_us(poll_us);
 	}

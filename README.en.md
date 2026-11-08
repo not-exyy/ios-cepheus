@@ -37,12 +37,14 @@ In the basic mode from flash the flash storage driver is still enabled: without 
 
 | Works (gl and metal modes) | Does not work |
 |---|---|
-| lock screen, home screen, apps, Settings, Spotlight | Wi-Fi, Bluetooth, cellular |
+| lock screen, home screen, apps, Settings, Spotlight | Bluetooth, cellular (SIM, calls, mobile data) |
 | touchscreen, gestures, power and volume buttons | camera, microphone, earpiece |
 | the AI button on the left is the Ring/Silent switch | Apple ID and iCloud sign-in (this phone has no Secure Enclave) |
 | GPU: about 60 frames/s while scrolling (gl) | the phone **does not charge** in the HakiOS bootloader |
 | sound through the bottom speaker, vibration | |
 | battery level in the status bar (read only) | |
+| screen brightness: the slider in Control Center and in Settings | auto-brightness (the ambient light sensor) |
+| **Wi-Fi** (from the flash only): pick a network in Settings → Wi-Fi, internet in Safari and apps | Wi-Fi: WPA3 and open networks without a password, Personal Hotspot |
 
 ### From RAM and from flash: what works where
 
@@ -57,6 +59,7 @@ Tested on a Mi 9 on November 6, 2026.
 | sound through the speaker | ✅ | ❌ the system runs out of memory and keeps evicting the audio service |
 | vibration | ✅ | ❌ for the same reason: iOS sends vibration through the audio service |
 | battery level in the status bar | ✅ | ✅ |
+| Wi-Fi | ✅ (turned off with the word `nowifi`: `./run.sh gl nowifi`) | ❌ the modem and Wi-Fi firmware is not in the RAM image |
 | CPU frequencies, temperature sensors | ✅ | ✅ |
 | settings, photos and app data are kept | ✅ (`/private/var` on the flash) | ❌ everything is lost when you exit |
 | does anything on the phone's flash have to change | yes, once (`./setup.sh install`) | no |
@@ -72,7 +75,7 @@ way to try iOS without changing anything on the phone, while sound, vibration an
 - **Xiaomi Mi 9 (cepheus)** with an **unlocked bootloader** (Mi Unlock). The kit is tested on global MIUI 12.5
   **V12.5.1.0.RFAMIXM** (Android 11), 64 GB model. It may not work with the bootloader (ABL) of other firmware.
 - **MIUI fastboot ROM** of the same version: `cepheus_global_images_V12.5.1.0.RFAMIXM_…_global.tgz`
-  (from the Xiaomi website or mirrors). The kit takes the GPU and audio DSP firmware and the phone's device tree
+  (from the Xiaomi website or mirrors). The kit takes the GPU, audio DSP, modem and Wi-Fi firmware and the phone's device tree
   from it. It is not installed on the phone.
 - **iOS 16.5 IPSW for the iPhone X**: `iPhone10,3,iPhone10,6_16.5_20F66_Restore.ipsw`, 6,165,698,198 bytes.
   You have to download it yourself: the kit contains no Apple files. The bootloader and the iOS images are built
@@ -114,7 +117,10 @@ from this folder.
 ```
 You can also pass an already unpacked firmware folder. The kit extracts the GPU firmware (`fw-gpu/`) from
 `vendor.img`, the audio DSP firmware (`fw-audio/`) from `NON-HLOS.bin`, and the device tree
-(`devices/cepheus/prebuilt/device-tree.dtb`) from `boot.img`.
+(`devices/cepheus/prebuilt/device-tree.dtb`) from `boot.img`. Also from `NON-HLOS.bin`: the modem and Wi-Fi firmware
+(`fw-modem/`, 87 MB). The Wi-Fi radio (WCN3998) is driven by the modem's processor, so HakiOS starts the modem but **does not
+connect it to the cellular network**: no SIM, no calls, no mobile data, and the modem partitions (`modem`, EFS, `persist`) are
+not written. If you did this step before, do it again and then step 2 again, otherwise there will be no Wi-Fi.
 
 ### 2. Build on the Mac (no phone needed)
 ```bash
@@ -192,10 +198,16 @@ Phone in fastboot. Then choose a mode:
 First the bootloader's green text appears on the screen, after 1–2 minutes the lock screen: swipe up or wait a few
 seconds. iOS runs with no time limit.
 
+**Wi-Fi** (gl and metal from the flash): Settings → Wi-Fi, pick a network and type its password, as on an iPhone. WPA2 networks;
+tested on 2.4 GHz (an iPhone's hotspot): about 65 Mbit/s down, about 3 Mbit/s up. 5 GHz and ordinary routers are not
+tested yet. WPA3 and networks without a password are not supported yet. The phone has its own permanent MAC address (made
+from the chip's serial number). If the network drops, the phone joins it again when it is back. Without Wi-Fi: `./run.sh gl nowifi`.
+
 - **Exit to the HakiOS bootloader:** hold **5 fingers on the screen for 1.5 seconds** (gl, metal) or run
   `./hakios-xnu-kernel/xl stop` from another terminal window (in basic this is the only way).
 - **Return to iOS from the bootloader without rebooting:** `./run.sh gl again` (instead of gl, the same mode as before,
-  with or without the same `ram`).
+  with or without the same `ram`). There is no Wi-Fi after `again`: the modem does not start a second time. For Wi-Fi, restart
+  the phone: hold Power for 15 seconds, then Volume down + Power (fastboot), and `./run.sh gl`.
 - **To make iOS exit by itself after a set time:** `XL_SECS=3600 ./run.sh gl` (one hour).
 - **Return to Android:** hold **Power** for a long time or run `fastboot reboot`. After `install new`, Android goes
   through the initial setup again on its first start. After `install userdata`, Android will not start until you

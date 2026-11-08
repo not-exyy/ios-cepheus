@@ -230,6 +230,7 @@ hakios_input_init(void)
 	hakios_goodix_init();
 	hakios_stfts_init();
 	hakios_buttons_init();
+	hakios_backlight_init();
 	hakios_battery_init();
 	hakios_pmfg_init();
 	hakios_ufs_init();
@@ -238,4 +239,5 @@ hakios_input_init(void)
 	hakios_wifi_init();
 	hakios_adsp_init();
 	hakios_mpss_init();
+	hakios_wcn3990_init();
 }

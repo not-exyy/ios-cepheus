@@ -69,8 +69,9 @@
  *   adreno_keep=1      with adreno=21: the GPU is not stopped again but kept for the system to draw
  *                      with, through the service HakiosGPU (see "the GPU kept on" below); it is
  *                      given back when the run ends (adreno_dirty=1: left as a panic leaves it)
- *   adreno_speed=N     step 17 asks the GMU for the 3D core's Nth speed: 1 315 MHz, 2 450 MHz,
- *                      3 550 MHz (the default: the most this phone's GPU is rated for)
+ *   adreno_speed=N     step 17 asks the GMU for the 3D core's Nth speed: sm7325 1 315 MHz, 2 450 MHz,
+ *                      3 550 MHz (the default: the most this phone's GPU is rated for); cepheus 1 315,
+ *                      2 405, 3 495, 4 585 MHz (the default: the Snapdragon 855's own most)
  *   adreno_blind=1     step 20 starts the command processor with its microcode nowhere, and
  *   adreno_stream1=N   step 18 leaves the core's second stream out (0) or gives it an empty
  *                      context of its own (2): what the SMMU then records shows what the core
@@ -215,16 +216,32 @@ static const struct debug_codes sm7325_debug = { 0x146, 0x6200c, 0x0b, 0x0d, 0x1
 static const struct debug_codes cepheus_debug = { 0x162, 0x43008, 0x0a, 0x0b, 0x0f, 0x10, 0x18, 0x19, 0, 0, 0 };
 
 /*
- * The speeds the GMU is offered for the 3D core (step 17): off, then the phone's three lowest, each with the level of the
- * 3D core's rail it needs (RPMh's own numbers; rail_vote() takes the next one RPMh has). sm7325: dt qcom,gpu-pwrlevels;
- * cepheus: dt gpu_opp_table_v2 of speed bin 0, whose opp-microvolt are the level + 1 (the vendor's RPMH_REGULATOR_LEVEL_OFFSET).
+ * The speeds the GMU is offered for the 3D core (step 17): off, then the phone's lowest, each with the level of the
+ * 3D core's rail it needs (RPMh's own numbers; rail_vote() takes the next one RPMh has); a row of 0 kHz after the
+ * first ends the table, and the last speed is the one asked for. sm7325: dt qcom,gpu-pwrlevels, its three lowest;
+ * cepheus: dt gpu_opp_table_v2 of speed bin 0, whose opp-microvolt are the level + 1 (the vendor's
+ * RPMH_REGULATOR_LEVEL_OFFSET), its four lowest -- 585 MHz is the Snapdragon 855's rated most (the table goes on to
+ * 675, 765 and 810, the 855+'s and beyond); 495 had the GPU's zoom frames of an app at ~16 ms (8 November).
  */
 struct core_speed {
 	uint32_t khz, level;
 };
-#define CORE_SPEEDS             4
+#define CORE_SPEEDS             5
 static const struct core_speed sm7325_speeds[CORE_SPEEDS] = { { 0, 0 }, { 315000, 64 }, { 450000, 128 }, { 550000, 192 } };
-static const struct core_speed cepheus_speeds[CORE_SPEEDS] = { { 0, 0 }, { 315000, 48 }, { 405000, 64 }, { 495000, 96 } };
+static const struct core_speed cepheus_speeds[CORE_SPEEDS] = { { 0, 0 }, { 315000, 48 }, { 405000, 64 }, { 495000, 96 },
+	{ 585000, 144 } };
+
+/* how many rows the board's table has: off, then up to the first row of 0 kHz */
+static unsigned
+core_speeds(const struct core_speed *speeds)
+{
+	unsigned n = 1;
+
+	while (n < CORE_SPEEDS && speeds[n].khz != 0) {
+		n++;
+	}
+	return n;
+}
 
 static const struct board {
 	const char *name;               /* /arm-io's device_type, as the loader writes it */
@@ -2634,7 +2651,7 @@ step_core_power(void)
 	const struct core_speed *speeds = board->speeds;
 	static struct hfi_perf_table perf;
 	static struct hfi_bw_table bw;
-	uint32_t core_start[2] = { 0, 0 }, start[1] = { 0 }, vote[4] = { 0, 1, 3, HFI_NO_INDEX }, granted = 0, speed = 0;
+	uint32_t core_start[2] = { 0, 0 }, start[1] = { 0 }, vote[4] = { 0, 1, 0, HFI_NO_INDEX }, granted = 0, speed = 0;
 	uint32_t ecp_off[4] = { 0, HFI_FEATURE_ECP, 0, 0 };     /* header, feature, enable, data */
 	uint16_t gfx[16], cx[16], mx[16];
 	unsigned gfx_levels, cx_levels, mx_levels;
@@ -2647,7 +2664,8 @@ step_core_power(void)
 		printf("adreno: %u: RPMh's list lacks one of the rails\n", step);
 		return false;
 	}
-	perf.gpu_levels = CORE_SPEEDS;
+	perf.gpu_levels = core_speeds(speeds);
+	vote[2] = perf.gpu_levels - 1;          /* the fastest of them */
 	for (unsigned i = 0; i < perf.gpu_levels; i++) {
 		perf.gpu[i].khz = speeds[i].khz;
 		perf.gpu[i].acd = 0xffffffff;           /* no adaptive clocking */
@@ -2662,8 +2680,8 @@ step_core_power(void)
 	    !rail_vote(48, cx, cx_levels, mx, mx_levels, &perf.gmu[1].vote)) {  /* "minimum SVS", the vendor's choice */
 		return false;
 	}
-	printf("adreno: %u: votes: 3D core %#x %#x %#x %#x, GMU %#x %#x\n", step, perf.gpu[0].vote, perf.gpu[1].vote,
-	    perf.gpu[2].vote, perf.gpu[3].vote, perf.gmu[0].vote, perf.gmu[1].vote);
+	printf("adreno: %u: votes: 3D core %#x %#x %#x %#x %#x, GMU %#x %#x\n", step, perf.gpu[0].vote, perf.gpu[1].vote,
+	    perf.gpu[2].vote, perf.gpu[3].vote, perf.gpu[4].vote, perf.gmu[0].vote, perf.gmu[1].vote);
 
 	bw.levels = 1;
 	bw.ddr_commands = 3;

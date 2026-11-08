@@ -77,8 +77,8 @@ Every driver the kernel can be built with. `CONFIG_HAKIOS_<NAME>=y` in a defconf
 
 | Driver | Files | Requires | Boot arguments | cepheus | qemu | sm7325 | |
 |---|---|---|---|---|---|---|
-| **`HAKIOS_QMI`**<br>QMI messages over the IPC router: how the Wi-Fi firmware's service and the modem's are spoken to | `hakios.qmi.c` |  |  |  |  | built | |
-| **`HAKIOS_MODEM`**<br>the modem (modem=1): started, its file systems served from the flash, the IPA's data path as en1, the SIM and the network registration. Research; needs fw-modem/ from the phone | `hakios.mpss.c`<br>`hakios.cell.c`<br>`hakios.nas.c`<br>`hakios.ipa.c` | `HAKIOS_QMI`, `HAKIOS_UFS` | `modem=`, `modem_again=`, `modem_apn=`, `modem_buffer=`, `modem_data_nobind=`, `modem_data_off=`, `modem_data_wait=`, `modem_dpm_off=` and 45 more |  |  | built | |
+| **`HAKIOS_QMI`**<br>QMI messages over the IPC router: how the Wi-Fi firmware's service and the modem's are spoken to | `hakios.qmi.c` |  |  | built |  | built | |
+| **`HAKIOS_MODEM`**<br>the modem (modem=1): started, its file systems served from the flash, the IPA's data path as en1, the SIM and the network registration. Research; needs fw-modem/ from the phone | `hakios.mpss.c`<br>`hakios.cell.c`<br>`hakios.nas.c`<br>`hakios.ipa.c` | `HAKIOS_QMI`, `HAKIOS_UFS` | `modem=`, `modem_again=`, `modem_apn=`, `modem_buffer=`, `modem_data_nobind=`, `modem_data_off=`, `modem_data_wait=`, `modem_dpm_off=` and 46 more | built |  | built | |
 
 ## net
 
@@ -108,6 +108,8 @@ Every driver the kernel can be built with. `CONFIG_HAKIOS_<NAME>=y` in a defconf
 
 | Driver | Files | Requires | Boot arguments | cepheus | qemu | sm7325 | |
 |---|---|---|---|---|---|---|
-| **`HAKIOS_WIFI`**<br>Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, Linux's ath11k (its object, made by tools/mk-ath11k.sh, is linked in only with this), a station, and the Apple80211 surface Darwin's wifid talks to. Needs fw-wifi/ from the phone | `hakios.wifi.c`<br>`hakios.wlfw.c`<br>`hakios.lx.c`<br>`hakios.sta.c`<br>`hakios.apple80211.c`<br>`hakios.wlan.cpp` | `HAKIOS_QMI` | `wifi=`, `wifi_again=`, `wifi_ask=`, `wifi_cal=`, `wifi_dirty=`, `wifi_file=`, `wifi_fine=`, `wifi_keep=` and 14 more |  |  | built | |
+| **`HAKIOS_WIFI`**<br>Wi-Fi of the WCN6750 (wifi=1, wifi_step=N): the DSP that runs the radio's firmware, and Linux's ath11k (its object, made by tools/mk-ath11k.sh, is linked in only with this) on WLAN. Needs fw-wifi/ from the phone | `hakios.wifi.c`<br>`hakios.wlfw.c` | `HAKIOS_QMI`, `HAKIOS_WLAN` | `wifi=`, `wifi_again=`, `wifi_ask=`, `wifi_cal=`, `wifi_dirty=`, `wifi_file=`, `wifi_fine=`, `wifi_keep=` and 14 more |  |  | built | |
+| **`HAKIOS_WLAN`**<br>What a Linux Wi-Fi driver's object stands on in the kernel (hakios.lx.c: memory, threads, interrupts, en0), a station, and the Apple80211 surface Darwin's wifid talks to. The radio's own side is a phone's driver, which must be built with it: WIFI (the WCN6750, ath11k) or WCN3990 (the Mi 9's, ath10k) | `hakios.lx.c`<br>`hakios.sta.c`<br>`hakios.apple80211.c`<br>`hakios.wlan.cpp` |  |  | built |  | built | |
+| **`HAKIOS_WCN3990`**<br>Wi-Fi of the Xiaomi Mi 9 (cepheus): the WCN3998, whose firmware runs in the modem's WLAN PD (wcn_step=N): a survey that only reads (1-3); the firmware's QMI service up to "FW READY" (4-7, with the modem); the radio's SMMU stream, its supplies (wcn_power=1 only) and mission mode (8-10) | `hakios.wcn3990.c` | `HAKIOS_WLAN` | `wcn_ce_peek=`, `wcn_lx=`, `wcn_mac=`, `wcn_pause=`, `wcn_power=`, `wcn_qdss_off=`, `wcn_ready=`, `wcn_return=` and 6 more | built |  |  | |
 
 The columns on the right are the devices' defconfigs: "built" means that defconfig builds the driver in.

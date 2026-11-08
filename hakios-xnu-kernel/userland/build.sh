@@ -53,6 +53,8 @@
 #                                   the kernel. adsp=1 needs none of it: the system image has the firmware in /fw.
 #                      MODEM=1      stage checked local MPSS firmware from ../fw-modem in system.apfs /fw.
 #                                   This does not start the modem; the XNU MPSS driver is still required.
+#                                   With FLASHBOOT=1 (cepheus) the modem's image and ../fw-modem/image in
+#                                   flashboot.apfs /fw as well: some 85 MB more for the phone's RAM.
 #   system.apfs      the system image, the root filesystem (the resident RAM disk, /dev/md0), an
 #                    APFS container: the part of Darwin userland 16.5 chosen by ../sysimage/select-system.py at
 #                    its real paths, the dyld shared cache, and src/stage0.c as /sbin/launchd (the
@@ -437,12 +439,12 @@ if [ -f ../fw-wifi/wpss.mdt ]; then
 	for f in bd_m20gl.elf regdb_xiaomi.bin; do
 		[ -f ../fw-wifi/qca6750/$f ] && install -m 0644 ../fw-wifi/qca6750/$f root/fw/
 	done
-	# the network the radio is to join: its name on the first line, its passphrase on the second. Yours, and
-	# so not in the repository; it goes where the firmware goes and the kernel reads it there (wifi_join=1)
-	rm -f root/fw/network
-	# SHARE=1: leave it out, for an image that is going to somebody else -- it is a passphrase
-	if [ -z "$SHARE" ] && [ -f ../fw-wifi/network ]; then install -m 0600 ../fw-wifi/network root/fw/network; fi
 fi
+# the network the radio is to join: its name on the first line, its passphrase on the second. Yours, and so not in
+# the repository; the kernel reads it in fw/ (wifi_join=1), on either phone (cepheus's radio needs no DSP image here)
+rm -f root/fw/network
+# SHARE=1: leave it out, for an image that is going to somebody else -- it is a passphrase
+if [ -z "$SHARE" ] && [ -f ../fw-wifi/network ]; then mkdir -p root/fw; install -m 0600 ../fw-wifi/network root/fw/network; fi
 # ... and the vibration motor's waveforms, the phone's /vendor/firmware/aw8697_haptic.bin, from ../fw-haptic
 # (drivers/haptic/hakios.haptic.c, haptic=3; 3.6 KB, the vendor's and not in the repository either)
 if [ -f ../fw-haptic/aw8697_haptic.bin ]; then
@@ -554,6 +556,20 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
 	if [ -f ../fw-audio/aw882xx_acf.bin ]; then
 		mkdir -p flashboot/fw
 		cp ../fw-audio/aw882xx_acf.bin flashboot/fw/
+	fi
+	# MODEM=1: the modem's image (modem.mdt and its segments, which the kernel loads: drivers/modem/hakios.mpss.c) and
+	# the rest of the phone's /vendor/firmware_mnt/image, which the modem reads over TFTP (the Wi-Fi's wlanmdsp.mbn,
+	# modem_pr/, the service registry's .jsn); from ../fw-modem or, as NON-HLOS.bin unpacks, ../fw-modem/image
+	if [ -n "$MODEM" ]; then
+		M=../fw-modem; [ -f $M/modem.mdt ] || M=../fw-modem/image
+		[ -f $M/modem.mdt ] || { echo "build.sh: MODEM=1 needs ../fw-modem/modem.mdt or ../fw-modem/image/modem.mdt" >&2; exit 1; }
+		mkdir -p flashboot/fw
+		cp $M/modem.mdt $M/modem.b[0-9][0-9] flashboot/fw/
+		if [ -d ../fw-modem/image ]; then
+			cp -R ../fw-modem/image flashboot/fw/image
+			rm -f flashboot/fw/image/modem.mdt flashboot/fw/image/modem.b[0-9][0-9]
+		fi
+		echo "  the modem's firmware: $(du -sh flashboot/fw | cut -f1) in /fw of the boot volume"
 	fi
 	# the package manager's prefix, when tools/mk-jb.sh has fetched one: /jb of the boot volume, which is
 	# /private/preboot/jb once the Darwin volume is the root -- the volume where a rootless jailbreak keeps its

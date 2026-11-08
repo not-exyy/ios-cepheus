@@ -53,6 +53,11 @@ app_gl	u
 applog	k
 applog_name	k
 autounlock	u
+backlight	k
+backlight_default	k
+backlight_lp	k
+backlight_off	k
+backlight_test	k
 battery	kl
 battery_shared_pa	k
 battery_stop	k
@@ -96,6 +101,8 @@ display_probe	k
 epoch	k
 fb_beat	k
 fb_ca_hz	k
+fb_cubic_b	k
+fb_cubic_c	k
 fb_diff	k
 fb_filter	k
 fb_flip	k
@@ -104,6 +111,7 @@ fb_measure	k
 fb_pp	k
 fb_pri	k
 fb_queue	k
+fb_reuse	k
 fb_te	k
 fb_threads	k
 fbheight	k
@@ -167,6 +175,7 @@ machine_name	k
 membench	k
 metal	ku
 metal_all	u
+metal_cover	u
 metal_dump	u
 metal_fps	u
 metal_gmem	u
@@ -199,6 +208,7 @@ modem_ipa_fw_at	k
 modem_ipa_gsi_enable	k
 modem_ipa_item	k
 modem_ipa_no_probe	k
+modem_ipa_qmi	k
 modem_ipa_quiet	k
 modem_ipa_raw	k
 modem_ipa_routes	k
@@ -300,6 +310,7 @@ touch_lat	ku
 touch_off_ms	k
 touch_poll_us	k
 touch_rate	k
+touch_recover	k
 touch_spi_hz	k
 touchscreen	k
 ufs	l
@@ -330,6 +341,17 @@ virtio_blk	k
 virtio_input	k
 virtio_net	k
 virtio_sound	k
+wcn_ce_peek	k
+wcn_lx	k
+wcn_mac	k
+wcn_pause	k
+wcn_power	k
+wcn_qdss_off	k
+wcn_ready	k
+wcn_return	k
+wcn_step	k
+wcn_wait	k
+wcn_watch	k
 wifi	k
 wifi_again	k
 wifi_ask	k

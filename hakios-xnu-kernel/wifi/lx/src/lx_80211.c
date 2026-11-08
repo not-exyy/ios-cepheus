@@ -508,10 +508,25 @@ linuxkpi_ieee80211_beacon_loss(struct ieee80211_vif *vif)
 	printf("lx: the driver reports beacons lost\n");
 }
 
+/*
+ * The access point is no longer heard: ath10k says so when the firmware has missed its beacons
+ * and they have not come back (mac.c: ath10k_mac_handle_beacon_miss(), three seconds later).
+ * mac80211 would leave the network then; here the network is taken as lost, as when the access
+ * point shows us the door, and Darwin and the station side are told (who join it again).
+ */
 void
 linuxkpi_ieee80211_connection_loss(struct ieee80211_vif *vif)
 {
+	struct lx_radio *radio = the_radio;
+
 	printf("lx: the driver reports the connection lost\n");
+	if (radio != NULL && radio->joined) {
+		lx_tell("lx: THE NETWORK IS LOST: its access point is no longer heard\n");
+		radio->joined = false;
+		radio->last_error = ETIMEDOUT;
+		lx_os_net_link(0);
+		lx_os_station_lost(ETIMEDOUT);
+	}
 }
 
 /* (the driver's recovery after its firmware has died, which nothing here goes through) */
@@ -961,6 +976,13 @@ station_up(struct lx_radio *radio)
 	memcpy(vif->bss_conf.addr, hw->wiphy->perm_addr, ETH_ALEN);
 	vif->bss_conf.vif = vif;
 	vif->bss_conf.bssid = no_network;	/* (the driver compares every beacon's sender with it) */
+	/*
+	 * No transmit power yet, as mac80211 has it (INT_MIN: the driver leaves the firmware's own): a zeroed interface
+	 * told ath10k 0 dBm (mac.c: ath10k_add_interface() takes bss_conf.txpower; logs/213534 "mac txpower 2g: 0"), and
+	 * the access point heard the phone so badly that it sent at 0.37 Mbit/s while it received at 10. join() gives the
+	 * channel's power.
+	 */
+	vif->bss_conf.txpower = INT_MIN;
 	vif->link_conf[0] = &vif->bss_conf;
 	/* the firmware is to take Ethernet frames and to give them, if the driver offers that (its frame mode) */
 	if (ieee80211_hw_check(hw, SUPPORTS_TX_ENCAP_OFFLOAD)) {
@@ -975,6 +997,9 @@ station_up(struct lx_radio *radio)
 	printf("lx: the radio is started: %d\n", ret);
 	if (ret == 0) {
 		radio->started = true;
+		if (lx_radio_started != NULL) {
+			lx_radio_started();
+		}
 		ret = radio->ops->add_interface(hw, vif);
 		printf("lx: an interface in station mode is added to it: %d (Ethernet frames %s the firmware, %s it)\n", ret,
 		    vif->offload_flags & IEEE80211_OFFLOAD_ENCAP_ENABLED ? "to" : "NOT to", vif->offload_flags &
@@ -986,6 +1011,8 @@ station_up(struct lx_radio *radio)
 	mutex_unlock(&hw->wiphy->mtx);
 	return (-ret);
 }
+
+void (*lx_radio_started)(void);
 
 static void
 station_down(struct lx_radio *radio)
@@ -1711,7 +1738,23 @@ station_join(struct lx_radio *radio, const struct hakios_sta_join *what)
 	memcpy(vif->cfg.ap_addr, target->address, ETH_ALEN);
 	memcpy(vif->cfg.ssid, name, name_length);
 	vif->cfg.ssid_len = name_length;
-	bss_changed(radio, BSS_CHANGED_BSSID);
+	/*
+	 * The transmit power, as mac80211 sets it once the channel is known (ieee80211_recalc_txpower()): what the
+	 * regulatory domain allows on the channel, less what the access point asks to be kept below that (its Power
+	 * Constraint element, 32); the firmware keeps it within what the board file has calibrated.
+	 */
+	{
+		const uint8_t *constraint = element(target->elements, target->elements_length, 32);
+		int power = channel->max_power;
+
+		if (constraint != NULL && constraint[1] >= 1 && constraint[2] < power) {
+			power -= constraint[2];
+		}
+		vif->bss_conf.txpower = power > 0 ? power : 1;
+		printf("lx: the transmit power: %d dBm (the channel's %d, the access point's constraint %d)\n",
+		    vif->bss_conf.txpower, channel->max_power, constraint != NULL && constraint[1] >= 1 ? constraint[2] : 0);
+	}
+	bss_changed(radio, BSS_CHANGED_BSSID | BSS_CHANGED_TXPOWER);
 	radio->channel = kzalloc(sizeof(*radio->channel) + hw->chanctx_data_size + 64, GFP_KERNEL);
 	radio->sta_memory = kzalloc(64 + sizeof(*radio->sta) + hw->sta_data_size, GFP_KERNEL);
 	if (radio->channel == NULL || radio->sta_memory == NULL) {

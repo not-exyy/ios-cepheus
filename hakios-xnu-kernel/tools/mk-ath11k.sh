@@ -35,6 +35,7 @@
 # (xnu-deps/host/bin/ld64, see xnu-deps/setup.sh). The two archives are 150 and 253 MB and are kept.
 #
 # usage: tools/mk-ath11k.sh [fetch]        "fetch" stops when the driver's sources are there
+#                                           "freebsd" when FreeBSD's tree is there as well
 set -e
 VERSION=7.0.14
 SHA256=de9999b784d2293f00d39c62d8f92a08ab8a54bc4e80ffd250a0c09cb07a0f98
@@ -112,6 +113,8 @@ if [ ! -d gen ]; then
 		printf '#define SMP 1\n' > opt_global.h
 	)
 fi
+# (tools/mk-ath10k.sh builds the WCN3990's driver on the same tree: "freebsd" stops here)
+[ "$1" = freebsd ] && { echo "mk-ath11k.sh: FreeBSD $FREEBSD's LinuxKPI, patched: $S"; exit 0; }
 
 # --- compile: the driver's files that are built so far, and ours
 DRIVER="core hal qmi ce hw fw htc wmi mac reg peer dp dp_rx dp_tx hal_rx hal_tx dbring p2p"

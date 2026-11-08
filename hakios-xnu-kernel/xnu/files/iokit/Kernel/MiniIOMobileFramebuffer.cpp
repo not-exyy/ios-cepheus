@@ -20,6 +20,7 @@
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSCollectionIterator.h>
 #include <libkern/c++/OSBoolean.h>
 #include <kern/thread_call.h>
 #include <kern/thread.h>
@@ -153,15 +154,101 @@ static TUNABLE(uint32_t, gDiff, "fb_diff", 0);
  * little crooked, here and there and never in the same places twice. By default every pixel of the
  * panel is worked out from the four of the picture around where it falls (bilinear).
  */
-static TUNABLE(uint32_t, gFilter, "fb_filter", 2);
+static TUNABLE(uint32_t, gFilter, "fb_filter", 4);
 /*
- * fb_filter=2 (the default): nearest neighbour while frames come, bilinear once they stop. Bilinear costs: a frame
+ * fb_filter=2: nearest neighbour while frames come, bilinear once they stop. Bilinear costs: a frame
  * took 3.6 ms to scale onto the panel as a rule and 11 ms for one in ten, at any priority (fb_pri), against 1.7 and
  * 4.3 by nearest neighbour (touch_lat=1, 30 October) -- and at 120 Hz a refresh is 8.3 ms. What nearest neighbour
  * gets wrong (a column in 25 and a row in 67 left out) does not show while the picture moves; so a frame drawn so is
  * drawn again, filtered, when no other has come for SETTLE_MS: what stands still on the screen is the bilinear one.
  */
 #define SETTLE_MS       40
+/*
+ * fb_filter=3: as 2, but what stands still is drawn again with a cubic filter (Mitchell-Netravali's family, four pixels of the
+ * picture each way) instead of bilinear. Bilinear on 25 columns to 24 leaves a stroke that falls on a pixel sharp and
+ * one that falls between two smeared over one more, and the same letter is then 4 pixels thick in one place and 5 in
+ * another (the user felt it, with every frame bilinear by the display controller's scaler, 7 November). The cubic filter softens every stroke a
+ * little wherever it falls, so the weights come out more even, the text a little less sharp. Boot-args fb_cubic_b and
+ * fb_cubic_c (percent, default 60 and 20) shape it: more B is smoother and more even, more C sharper (B = C = 33 is
+ * Mitchell's own, B = 0, C = 50 Catmull-Rom, B = 100, C = 0 the B-spline). How much the apparent width of a stroke
+ * changes with where it falls on 25 to 24 (worked out on the host with this code): a 1-pixel line 0 to 1.73 bilinear,
+ * 0.94 to 1.73 at 33/33, 1.42 to 1.73 at 60/20, 1.68 to 1.76 at 80/10; a 3-pixel stroke 2.80 to 3.21, 2.88 to 3.20,
+ * 3.07 to 3.21, 3.20 to 3.24. It costs some milliseconds more than bilinear, once, when the screen stops.
+ */
+/*
+ * fb_filter=4 (the default): moving frames bilinear (as fb_filter=1), what stands still cubic (as 3). What nearest
+ * neighbour gets wrong does show while the picture moves after all: the user saw the strokes change weight on what
+ * moved, with the still text even (fb_filter=3, 7 November). How long the scaling of a frame takes is in the log every
+ * five seconds ("scaling a frame took"). On the phone (logs/220554-run.log, cpufreq=1, 3 threads): 3.7 ms a frame,
+ * 4.9 at the most, of the 16.7 a refresh has; 57-58 frames a second scrolling; the cubic frame once it stands still
+ * 7 to 20 ms. The user: "the text looks perfect".
+ */
+static TUNABLE(uint32_t, gCubicB, "fb_cubic_b", 60);
+static TUNABLE(uint32_t, gCubicC, "fb_cubic_c", 20);
+#define CUBIC_ONE       4096            /* the cubic weights' fixed point: four of them add up to this */
+
+/*
+ * The cubic filter's weight at `d` 256ths of a pixel from the sample (0 to 511), of CUBIC_ONE: Mitchell-Netravali's
+ * k(x) = ((12 - 9B - 6C)x^3 + (-18 + 12B + 6C)x^2 + (6 - 2B)) / 6 under 1, and
+ * ((-B - 6C)x^3 + (6B + 30C)x^2 + (-12B - 48C)x + (8B + 24C)) / 6 from 1 to 2, with B and C in percent.
+ */
+static int32_t
+cubic_weight(int64_t d, int64_t b, int64_t c)
+{
+	const int64_t u = 256, u2 = u * u, u3 = u2 * u;
+	int64_t num;
+
+	if (d < 0) {
+		d = -d;
+	}
+	if (d < u) {
+		num = (1200 - 9 * b - 6 * c) * d * d * d + (-1800 + 12 * b + 6 * c) * d * d * u + (600 - 2 * b) * u3;
+	} else if (d < 2 * u) {
+		num = (-b - 6 * c) * d * d * d + (6 * b + 30 * c) * d * d * u + (-12 * b - 48 * c) * d * u2 + (8 * b + 24 * c) * u3;
+	} else {
+		return 0;
+	}
+	return (int32_t) (num * CUBIC_ONE / (600 * u3));
+}
+
+/*
+ * The four taps for a sample `at` 256ths of a pixel into `in` pixels: which pixels (kept within the first and the
+ * last) and their weights, which add up to CUBIC_ONE exactly.
+ */
+static void
+cubic_taps(int64_t at, int64_t in, uint16_t * index, int16_t * weight)
+{
+	int64_t i = at >> 8, f = at & 255, b = gCubicB <= 100 ? gCubicB : 60, c = gCubicC <= 100 ? gCubicC : 20;
+	int32_t sum = 0, big = 0;
+
+	for (int k = 0; k < 4; k++) {
+		int64_t at_k = i - 1 + k;
+
+		index[k] = (uint16_t) (at_k < 0 ? 0 : at_k > in - 1 ? in - 1 : at_k);
+		weight[k] = (int16_t) cubic_weight(f - 256 * (k - 1), b, c);
+		sum += weight[k];
+		big = weight[k] > weight[big] ? k : big;
+	}
+	weight[big] = (int16_t) (weight[big] + CUBIC_ONE - sum);
+}
+
+/* Four pixels mixed with cubic weights (of CUBIC_ONE), each channel kept within 0 and 255. */
+static inline uint32_t
+cubic_mix(uint32_t p0, uint32_t p1, uint32_t p2, uint32_t p3, const int16_t * w)
+{
+	uint32_t out = 0;
+
+	if (p0 == p1 && p1 == p2 && p2 == p3) {
+		return p0;                      /* (most of a screen is the same as next to it) */
+	}
+	for (int shift = 0; shift < 32; shift += 8) {
+		int32_t v = ((int32_t) (p0 >> shift & 255) * w[0] + (int32_t) (p1 >> shift & 255) * w[1] +
+		    (int32_t) (p2 >> shift & 255) * w[2] + (int32_t) (p3 >> shift & 255) * w[3] + CUBIC_ONE / 2) >> 12;
+
+		out |= (uint32_t) (v < 0 ? 0 : v > 255 ? 255 : v) << shift;
+	}
+	return out;
+}
 static TUNABLE(uint32_t, gRefreshHz, "fb_hz", kFBRefreshHz);
 /*
  * Boot-arg fb_ca_hz=N: the refresh rate told to CoreAnimation (IOMFBDisplayRefresh) when it is not to be fb_hz's. On
@@ -203,6 +290,15 @@ swapQueue(void)
 {
 	return gQueue >= 1 && gQueue <= SWAP_QUEUE ? gQueue : 1;
 }
+/*
+ * CoreAnimation's Metal renderer draws its frames into two surfaces by turns (logs/185031-run.log: surfaces 1, 2, 1,
+ * 2 ...) and starts on the next one as soon as SwapEnd returns; it neither asks whether a surface is in use nor waits for
+ * a word from here. So with a frame waiting here, or being copied to the panel, in surface A while SwapEnd took the one
+ * in B, the GPU drew the frame after into A meanwhile: bands of two frames in one on the panel (an application's zoom,
+ * the more the slower the GPU drew). SwapEnd now returns once no surface but the swap's own is waiting for the panel or
+ * being read for it (a frame copied, or drawn again filtered). Boot-arg fb_reuse=0: at once, as before.
+ */
+static TUNABLE(uint32_t, gReuseWait, "fb_reuse", 1);
 /*
  * Boot-arg touch_lat=1: a line for every swap handed over ("tl: s ID at US") and for every frame
  * put on the panel ("tl: v ID ready US shown US done US": the GPU done with it, its beat come, the
@@ -739,12 +835,18 @@ public:
 	uint64_t        fStatBeatWait;
 	uint32_t        fStatSurfaces[8];       /* the first different surfaces the bottom layer was given */
 	uint32_t        fStatHeld, fStatLost;   /* swaps that waited for the one before; that gave up waiting */
+	uint32_t        fReading[SWAP_LAYERS];  /* the surfaces the presenter reads right now (fb_reuse), under fSwapLock */
+	uint32_t        fStatReuse, fStatReuseLost;     /* SwapEnds that waited for another surface to be read; gave up */
+	uint64_t        fStatReuseWait;
+	bool            othersBusy(const uint8_t * swap);
 	uint64_t        fSwapTime;              /* when the last swap was handed over */
 	uint32_t        fStatSwapsLate;         /* swaps that came more than a refresh and a quarter after the one before (and no pause) */
 	uint64_t        fStatWaiting;           /* how long frames waited for the GPU here */
 	/* how the display is doing: frames and time spent drawing them here since fStatSince */
 	uint32_t        fStatFrames;
 	uint64_t        fStatSince, fStatDrawing;
+	uint64_t        fStatScaling, fStatScaleMax;    /* ... of which the layers' drawing (scaling) itself, and the longest */
+	uint64_t        fStatSettling, fStatSettleMax;  /* ... and the frames drawn again once they stood still (fb_filter) */
 	/* ... and how evenly: the time from each frame to the next, counted by the millisecond (the last count: longer) */
 	uint64_t        fLastFrame;
 	uint32_t        fFrameTimes[FRAME_TIMES + 1], fFramePauses, fFrameLongest;
@@ -755,6 +857,8 @@ public:
 	/* the screen recording, if one was asked for */
 	uint32_t *      fColumn;                /* drawLayer(): source column for every panel column */
 	uint16_t *      fColumnWeight;          /* ... with fb_filter: how much of the column after it, of 256 */
+	uint16_t *      fCubicColumn;           /* ... with fb_filter=3, settling: the four source columns of every panel column */
+	int16_t *       fCubicWeight;           /* ... and their weights, of CUBIC_ONE */
 	uint32_t *      fBlendRow;              /* ... and a row of the picture blended from two (fBlendRowSize pixels) */
 	uint32_t        fBlendRowSize;
 	uint8_t *       fRecBase;
@@ -766,6 +870,7 @@ public:
 	uint32_t        fRecCosted;             /* ... of how many frames: a line every 120 */
 
 	virtual bool start(IOService * provider) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn setProperties(OSObject * properties) APPLE_KEXT_OVERRIDE;
 	void publishModes(void);
 	void publishRefresh(void);
 	MiniIOSurface * defaultSurface(void);
@@ -790,6 +895,36 @@ public:
 };
 
 OSDefineMetaClassAndStructors(IOMobileFramebuffer, IOService);
+
+/*
+ * What user space sets on the display (IORegistryEntrySetCFProperty): CoreBrightness's IOMFBBrightnessLevel,
+ * IOMFBContrastEnhancerStrength, BLNitsCap and the like, which Apple's display driver acts on. None is acted on here
+ * (the panel's brightness is drivers/gpu/hakios.backlight.c's, through AppleARMBacklight); the first ones are logged,
+ * so that what is sent can be read, and the answer stays IOService's.
+ */
+IOReturn
+IOMobileFramebuffer::setProperties(OSObject * properties)
+{
+	static unsigned told;
+	OSDictionary * dict = OSDynamicCast(OSDictionary, properties);
+
+	if (dict != NULL && told < 16) {
+		OSCollectionIterator * keys = OSCollectionIterator::withCollection(dict);
+		const OSSymbol * key;
+		char procname[32];
+
+		told++;
+		proc_selfname(procname, sizeof(procname));
+		while (keys != NULL && (key = OSDynamicCast(OSSymbol, keys->getNextObject())) != NULL) {
+			OSNumber * n = OSDynamicCast(OSNumber, dict->getObject(key));
+
+			IOLog("MiniIOMobileFramebuffer: %s sets %s = %s%llu (%#llx)\n", procname, key->getCStringNoCopy(),
+			    n != NULL ? "" : "(not a number) ", n != NULL ? n->unsigned64BitValue() : 0, n != NULL ? n->unsigned64BitValue() : 0);
+		}
+		OSSafeReleaseNULL(keys);
+	}
+	return IOService::setProperties(properties);
+}
 
 static void
 setNumber(OSDictionary * dict, const char * key, uint64_t value)
@@ -959,6 +1094,10 @@ IOMobileFramebuffer::start(IOService * provider)
 	}
 	fColumn = IONewZero(uint32_t, fPanelWidth);
 	fColumnWeight = IONewZero(uint16_t, fPanelWidth);
+	if (gFilter == 3 || gFilter == 4) {
+		fCubicColumn = IONewZero(uint16_t, 4 * fPanelWidth);
+		fCubicWeight = IONewZero(int16_t, 4 * fPanelWidth);
+	}
 	fDiff = gDiff != 0;
 	fDiffLeft = fDiffTop = ~0u;
 	IOLog("MiniIOMobileFramebuffer: display %ux%u on a panel of %ux%u (%u bytes per row)\n", fWidth, fHeight,
@@ -1144,6 +1283,7 @@ struct RowJob {
 	int32_t         sx, sy, sw, sh, px0, py0, px1, py1, cx0, cx1;
 	int32_t         ry0, ry1;       /* the rows of the rectangle that are on the panel: all that is looked at, whatever its size */
 	bool            filter, unscaled;
+	bool            cubic;          /* (fb_filter=3, settling) four by four, not two by two */
 };
 
 void
@@ -1166,6 +1306,28 @@ IOMobileFramebuffer::drawRows(const RowJob * job, int32_t y0, int32_t y1, uint32
 		if (job->unscaled) {
 			/* not scaled at all */
 			memcpy(to + px0, pixels + (size_t) (sy + y - py0) * stride + (size_t) sx * 4, (size_t) sw * 4);
+			continue;
+		}
+		if (job->cubic) {
+			/* four rows of the picture mixed into one, then four of its pixels into each of the panel's */
+			uint16_t rows[4];
+			int16_t rowWeights[4];
+			const uint32_t * src[4];
+			uint32_t first = fCubicColumn[cx0 * 4], last = fCubicColumn[(cx1 - 1) * 4 + 3];
+			uint32_t * __restrict mixed = blendRow;
+
+			cubic_taps(sample_at(y - py0, sh, py1 - py0), sh, rows, rowWeights);
+			for (int k = 0; k < 4; k++) {
+				src[k] = (const uint32_t *) (pixels + (size_t) (sy + rows[k]) * stride) + sx;
+			}
+			for (uint32_t c = first; c <= last; c++) {
+				mixed[c] = cubic_mix(src[0][c], src[1][c], src[2][c], src[3][c], rowWeights);
+			}
+			for (int32_t x = cx0; x < cx1; x++) {
+				const uint16_t * i = fCubicColumn + x * 4;
+
+				to[x] = cubic_mix(mixed[i[0]], mixed[i[1]], mixed[i[2]], mixed[i[3]], fCubicWeight + x * 4);
+			}
 			continue;
 		}
 		if (filter) {
@@ -1272,7 +1434,8 @@ IOMobileFramebuffer::drawLayer(MiniIOSurface * s, const int32_t * src, const int
 	int32_t sx = src[0], sy = src[1], sw = src[2], sh = src[3];
 	int32_t dx = dst[0], dy = dst[1], dw = dst[2], dh = dst[3];
 	int32_t px0, py0, px1, py1, cx0, cx1;
-	bool filter = gFilter == 1 || (gFilter == 2 && fSettling);
+	bool filter = gFilter == 1 || gFilter == 4 || ((gFilter == 2 || gFilter == 3) && fSettling);
+	bool cubic = (gFilter == 3 || gFilter == 4) && fSettling && fCubicColumn != NULL && fCubicWeight != NULL;
 	RowJob job;
 
 	if (sw <= 0 || sh <= 0) {
@@ -1353,7 +1516,9 @@ IOMobileFramebuffer::drawLayer(MiniIOSurface * s, const int32_t * src, const int
 	cx0 = px0 < 0 ? 0 : px0;
 	cx1 = (uint32_t) px1 > fPanelWidth ? (int32_t) fPanelWidth : px1;
 	for (int32_t x = cx0; x < cx1; x++) {
-		if (filter) {
+		if (filter && cubic) {
+			cubic_taps(sample_at(x - px0, sw, px1 - px0), sw, fCubicColumn + x * 4, fCubicWeight + x * 4);
+		} else if (filter) {
 			int64_t at = sample_at(x - px0, sw, px1 - px0);
 
 			fColumn[x] = (uint32_t) (at >> 8);              /* (in the blended row: from sx on) */
@@ -1377,6 +1542,7 @@ IOMobileFramebuffer::drawLayer(MiniIOSurface * s, const int32_t * src, const int
 	job.ry0 = py0 < 0 ? 0 : py0;
 	job.ry1 = py1 > (int32_t) fPanelHeight ? (int32_t) fPanelHeight : py1;
 	job.filter = filter;
+	job.cubic = filter && cubic;
 	job.unscaled = px1 - px0 == sw && py1 - py0 == sh && px0 >= 0 && (uint32_t) px1 <= fPanelWidth;
 	if (fThreads <= 1 || fDiff || fHelpersStarted + 1 < fThreads) {
 		drawRows(&job, job.ry0, job.ry1, fBlendRow);
@@ -1472,7 +1638,51 @@ IOMobileFramebuffer::present(const uint8_t * swap)
 	}
 	fSwapsWaiting++;
 	IOLockWakeup(fSwapLock, fSwap, true);
+	if (gReuseWait && othersBusy(swap)) {
+		/* (the surface CoreAnimation draws into next is one of the others: not till the panel is done with it) */
+		uint64_t began = mach_absolute_time();
+
+		fStatReuse++;
+		while (othersBusy(swap)) {
+			if (IOLockSleepDeadline(fSwapLock, fReading, deadline, THREAD_UNINT) == THREAD_TIMED_OUT && othersBusy(swap)) {
+				fStatReuseLost++;
+				break;
+			}
+		}
+		fStatReuseWait += mach_absolute_time() - began;
+	}
 	IOLockUnlock(fSwapLock);
+}
+
+/* With fSwapLock held: is a surface not among this swap's waiting for the panel (a swap before it) or being read for it? */
+bool
+IOMobileFramebuffer::othersBusy(const uint8_t * swap)
+{
+	auto ours = [&](uint32_t sid) {
+		for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+			if (swapWord(swap, SWAP_SURFACE(layer)) == sid) {
+				return true;
+			}
+		}
+		return false;
+	};
+	for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+		if (fReading[layer] != 0 && !ours(fReading[layer])) {
+			return true;
+		}
+	}
+	for (unsigned k = 0; k + 1 < fSwapsWaiting; k++) {     /* (the last waiting is this one) */
+		const uint8_t * other = fSwap[(fSwapFirst + k) % SWAP_QUEUE];
+
+		for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+			uint32_t sid = swapWord(other, SWAP_SURFACE(layer));
+
+			if (sid != 0 && !ours(sid)) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 void
@@ -1499,10 +1709,15 @@ IOMobileFramebuffer::presenter(void)
 			}
 			clock_interval_to_deadline(SETTLE_MS, NSEC_PER_MSEC, &deadline);
 			if (IOLockSleepDeadline(fSwapLock, fSwap, deadline, THREAD_UNINT) == THREAD_TIMED_OUT && fSwapsWaiting == 0) {
+				for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+					fReading[layer] = surfaces[layer] != NULL ? swapWord(swap, SWAP_SURFACE(layer)) : 0;
+				}
 				IOLockUnlock(fSwapLock);
 				settle(swap, surfaces);
 				unsettled = false;
 				IOLockLock(fSwapLock);
+				bzero(fReading, sizeof(fReading));
+				IOLockWakeup(fSwapLock, fReading, false);
 			}
 		}
 		IOLockUnlock(fSwapLock);
@@ -1516,9 +1731,16 @@ IOMobileFramebuffer::presenter(void)
 		IOLockLock(fSwapLock);
 		memcpy(swap, fSwap[fSwapFirst], SWAP_SIZE);
 		memcpy(surfaces, fSwapSurfaces[fSwapFirst], sizeof(surfaces));
+		for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+			fReading[layer] = swapWord(swap, SWAP_SURFACE(layer));
+		}
 		IOLockUnlock(fSwapLock);
 		show(swap, surfaces);
-		unsettled = gFilter == 2;
+		IOLockLock(fSwapLock);
+		bzero(fReading, sizeof(fReading));
+		IOLockWakeup(fSwapLock, fReading, false);
+		IOLockUnlock(fSwapLock);
+		unsettled = gFilter == 2 || gFilter == 3 || gFilter == 4;
 		if (!unsettled) {
 			for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
 				if (surfaces[layer] != NULL) {
@@ -1547,6 +1769,8 @@ IOMobileFramebuffer::settle(const uint8_t * swap, MiniIOSurface ** surfaces)
 		fBase = flipBack();
 		memcpy(fBase, gFbVirt[gFront], (size_t)fRowBytes * fPanelHeight);
 	}
+	uint64_t t0 = mach_absolute_time(), took;
+
 	fSettling = true;
 	for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
 		MiniIOSurface * s = surfaces[layer];
@@ -1559,6 +1783,9 @@ IOMobileFramebuffer::settle(const uint8_t * swap, MiniIOSurface ** surfaces)
 		drawLayer(s, src, dst);
 	}
 	fSettling = false;
+	took = mach_absolute_time() - t0;
+	fStatSettling += took;
+	fStatSettleMax = took > fStatSettleMax ? took : fStatSettleMax;
 	if (gPipe != NULL) {
 		flipShow();
 	}
@@ -1572,6 +1799,7 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
 	uint32_t set = swapWord(swap, SWAP_LAYERS_SET);
 	uint64_t began = mach_absolute_time(), nanos, ready, shown, drawn;
 	uint32_t layers = 0;
+	uint64_t scaling = 0;           /* (the layers' drawing, this frame) */
 	MiniIOSurface * recorded = NULL;
 	bool report;
 
@@ -1688,7 +1916,10 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
 				fGraphics = true;
 				PE_initialize_console(NULL, kPEGraphicsMode);
 			}
+			uint64_t t0 = mach_absolute_time();
+
 			drawLayer(s, src, dst);
+			scaling += mach_absolute_time() - t0;
 			if (layer == 0) {
 				recorded = s;   /* (recorded once the frame is in the panel's memory: see below) */
 			}
@@ -1718,6 +1949,8 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
 	/* every five seconds in which something was drawn: how many frames, and what each cost here */
 	fStatFrames++;
 	fStatDrawing += mach_absolute_time() - began;
+	fStatScaling += scaling;
+	fStatScaleMax = scaling > fStatScaleMax ? scaling : fStatScaleMax;
 	if (fStatSince == 0) {
 		fStatSince = began;
 	}
@@ -1735,6 +1968,17 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
 		    fStatFrames * NSEC_PER_SEC / nanos, drawing / fStatFrames / NSEC_PER_USEC,
 		    waiting / fStatFrames / NSEC_PER_USEC, fStatOnBeat, fStatOnBeat ? beat / fStatOnBeat / NSEC_PER_USEC : 0,
 		    fStatHeld, fStatLost, fStatSwapsLate, fStatSettled);
+		{
+			uint64_t reuse;
+
+			IOLockLock(fSwapLock);
+			absolutetime_to_nanoseconds(fStatReuseWait, &reuse);
+			IOLog("MiniIOMobileFramebuffer: %u swaps waited for the panel to be done with another surface (fb_reuse), %llu us "
+			    "each, %u gave up\n", fStatReuse, fStatReuse ? reuse / fStatReuse / NSEC_PER_USEC : 0, fStatReuseLost);
+			fStatReuse = fStatReuseLost = 0;
+			fStatReuseWait = 0;
+			IOLockUnlock(fSwapLock);
+		}
 		fStatSwapsLate = 0;
 		for (different = 0; different < 8 && fStatSurfaces[different] != 0; different++) {
 		}
@@ -1750,8 +1994,23 @@ IOMobileFramebuffer::show(const uint8_t * swap, MiniIOSurface ** surfaces)
 			    fStatSurfaces[4], made, making, again, freed, freeing);
 		}
 		bzero(fStatSurfaces, sizeof(fStatSurfaces));
+		unsigned settledFrames = fStatSettled;
+
 		fStatHeld = fStatLost = fStatOnBeat = fStatSettled = 0;
 		fStatWaiting = fStatBeatWait = 0;
+		{
+			uint64_t scale, scaleMax, settle, settleMax;
+
+			absolutetime_to_nanoseconds(fStatScaling, &scale);
+			absolutetime_to_nanoseconds(fStatScaleMax, &scaleMax);
+			absolutetime_to_nanoseconds(fStatSettling, &settle);
+			absolutetime_to_nanoseconds(fStatSettleMax, &settleMax);
+			IOLog("MiniIOMobileFramebuffer: scaling a frame took %llu us, the longest %llu us (fb_filter=%u, %u threads); "
+			    "%u drawn again once still, %llu us each, the longest %llu us\n", scale / fStatFrames / NSEC_PER_USEC,
+			    scaleMax / NSEC_PER_USEC, gFilter, fThreads, settledFrames, settledFrames ? settle / settledFrames / NSEC_PER_USEC : 0,
+			    settleMax / NSEC_PER_USEC);
+			fStatScaling = fStatScaleMax = fStatSettling = fStatSettleMax = 0;
+		}
 		reportFrameTimes();
 		if (fDiff) {
 			IOLog("MiniIOMobileFramebuffer: %llu pixels of the panel changed a frame, all within %u,%u to %u,%u\n",
