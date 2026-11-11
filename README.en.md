@@ -244,7 +244,7 @@ README.md             this file in Russian
 README.en.md          this file in English
 README.zh-CN.md       this file in Simplified Chinese
 setup.sh              installation: check, firmware, build, backup, install, flash, verify, uninstall
-run.sh                running: gl, metal, basic modes; ram; again
+run.sh                running: gl, metal, basic modes; ram; nowifi; again
 tools/gpt-take.py     install userdata: the userdata entry in the partition table becomes darwin, nothing else
 tools/adb-twrp.sh     adb for the backup from TWRP
 tools/pack.sh         a shareable archive of the kit (see below)

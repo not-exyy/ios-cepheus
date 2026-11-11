@@ -231,7 +231,7 @@ README.md             本文件（俄语）
 README.en.md          本文件（英语）
 README.zh-CN.md       本文件（简体中文）
 setup.sh              安装：check、firmware、build、backup、install、flash、verify、uninstall
-run.sh                运行：gl、metal、basic 模式；ram；again
+run.sh                运行：gl、metal、basic 模式；ram；nowifi；again
 tools/gpt-take.py     install userdata：分区表中的 userdata 条目变为 darwin，别无其他改动
 tools/adb-twrp.sh     用于从 TWRP 备份的 adb
 tools/pack.sh         生成可分享的套件压缩包（见下文）

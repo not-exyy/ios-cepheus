@@ -239,7 +239,7 @@ README.md             этот файл
 README.en.md          этот файл на английском
 README.zh-CN.md       этот файл на китайском (упрощённом)
 setup.sh              установка: check, firmware, build, backup, install, flash, verify, uninstall
-run.sh                запуск: сценарии gl, metal, basic; ram; again
+run.sh                запуск: сценарии gl, metal, basic; ram; nowifi; again
 tools/gpt-take.py     install userdata: запись userdata в таблице разделов становится darwin, больше ничего
 tools/adb-twrp.sh     adb для резервной копии из TWRP
 tools/pack.sh         архив набора, которым можно делиться (см. ниже)
